@@ -12,9 +12,10 @@
 |------|------|
 | 开发阶段 | 尚未开始编码，处于规划阶段 |
 | 项目脚手架 | 未创建，代码目录不存在 |
-| Docker | 未安装（用户需要先装 Docker Desktop） |
-| 讯飞星火 API Key | 未获取（用户需要注册 https://www.xfyun.cn/） |
+| Docker | ✅ 已安装，可正常运行 |
+| 讯飞星火 API Key | ✅ 已获取，API 调用通过 |
 | settings.local.json | 已配置好所有权限 |
+| MCP 服务 | Playwright（可用）+ MySQL（可用） |
 
 ## 二、技术栈总表
 
@@ -839,7 +840,7 @@ interface UserState {
 ## 十、实现路线图（按52天规划执行）
 
 ### 第一阶段：调研验证（5.9 - 5.15）— 当前所在
-- [ ] 5.9-10: 注册讯飞星火，跑通Hello World API调用
+- [x] 5.9-10: 注册讯飞星火，跑通Hello World API调用
 - [ ] 5.10-11: 研读参考项目 `zzzlip/langgraph-AI-interview-agent`
 - [ ] 5.11-12: LangGraph Quick Start + Supervisor模式Tutorial
 - [ ] 5.13: ChromaDB Quick Start + Embedding检索
