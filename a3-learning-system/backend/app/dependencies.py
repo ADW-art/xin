@@ -34,3 +34,19 @@ def get_spark_client() -> SparkClient:
             api_secret=settings.spark_api_secret,
         )
     return _spark_client
+
+
+# ============================================================
+# LangGraph 图实例（单例，基于同一个 SparkClient）
+# ============================================================
+
+_graph = None
+
+
+def get_graph():
+    """返回编译好的 LangGraph 图（单例）"""
+    global _graph
+    if _graph is None:
+        from app.agents.supervisor import build_graph
+        _graph = build_graph(get_spark_client())
+    return _graph
