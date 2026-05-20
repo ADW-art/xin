@@ -8,10 +8,10 @@ from app.config import settings
 from app.services.spark_client import SparkClient
 
 # ============================================================
-# SparkClient 全局单例
+# SparkClient 全局单例---防止重复创建对象-防止重复书写代码
 # ============================================================
 
-_spark_client: SparkClient | None = None
+_spark_client: SparkClient | None = None #私有的全局变量声明
 
 
 def get_spark_client() -> SparkClient:
@@ -26,7 +26,7 @@ def get_spark_client() -> SparkClient:
       async def chat(spark: SparkClient = Depends(get_spark_client)):
           spark.chat_stream(...)
     """
-    global _spark_client #赋值外部变量声明
+    global _spark_client #赋值外部变量声明-直接用外面那个声明好的
     if _spark_client is None:
         _spark_client = SparkClient(
             app_id=settings.spark_app_id,

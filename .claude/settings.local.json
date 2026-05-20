@@ -58,8 +58,26 @@
       "Read(//e/tmp/**)",
       "Bash(where git *)",
       "Read(//c/Program Files/Git/bin/**)",
-      "Skill(claude-hud:setup)"
+      "Skill(claude-hud:setup)",
+      "Bash(netstat -ano)",
+      "Bash(powershell -Command \"netstat -ano | Select-String 'LISTENING' | Select-String ':\\(8000|3307|6379|9000\\)'\")",
+      "Bash(E:/code/claude-1/a3-learning-system/backend/venv/Scripts/python.exe *)",
+      "Skill(update-config)"
     ]
   },
-  "enableAllProjectMcpServers": true
+  "enableAllProjectMcpServers": true,
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // empty' | while IFS= read -r f; do case \"$f\" in *.py) E:/code/claude-1/a3-learning-system/backend/venv/Scripts/python.exe -m py_compile \"$f\" 2>&1 || true ;; esac; done",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
 }

@@ -16,7 +16,7 @@ router = APIRouter(prefix="/api/chat", tags=["对话"])#APIrouter
 
 
 # ============================================================
-# 请求模型：告诉 FastAPI 前端会传什么 JSON
+# 请求模型：告诉 FastAPI 前端会传什么 JSON--校验字段，解析json
 # ============================================================
 class ChatRequest(BaseModel):
     content: str = Field(..., min_length=1, description="用户输入的消息")
@@ -44,7 +44,7 @@ async def chat_send(
     # 生成器函数：逐 token → SSE 格式
     async def event_stream():
         try:
-            for chunk in spark.chat_stream(messages):
+            for chunk in spark.chat_stream(messages):#传入解构好的字符串，调用封装好的函数查解构
                 # 每个 chunk 是一小段文本（可能 1~5 个字）
                 yield f"event: message\ndata: {json.dumps({'content': chunk}, ensure_ascii=False)}\n\n"
 
@@ -56,10 +56,10 @@ async def chat_send(
             yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
 
     return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
+        event_stream(),#返回内容
+        media_type="text/event-stream",#MIME类型
         headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
+            "Cache-Control": "no-cache",#不让浏览器缓存
+            "X-Accel-Buffering": "no",#不让nginx缓存
         },
     )

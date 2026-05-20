@@ -1,9 +1,11 @@
 import os
+from pathlib import Path
 from pydantic_settings import BaseSettings
+
 
 class Settings(BaseSettings):
     # 讯飞星火
-    spark_app_id: str = ""
+    spark_app_id: str = ""#从.env中读取
     spark_api_key: str = ""
     spark_api_secret: str = ""
 
@@ -35,6 +37,6 @@ class Settings(BaseSettings):
     embedding_device: str = "cpu"
 
     class Config:
-        env_file = ".env"
+        env_file = Path(__file__).resolve().parent.parent.parent / ".env"
 
-settings = Settings()
+settings = Settings()#创建全局对象
