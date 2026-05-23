@@ -13,7 +13,6 @@ from app.services.spark_client import SparkClient
 
 _spark_client: SparkClient | None = None #私有的全局变量声明
 
-
 def get_spark_client() -> SparkClient:
     """返回 SparkClient 的全局唯一实例（单例模式）
 
@@ -27,7 +26,7 @@ def get_spark_client() -> SparkClient:
           spark.chat_stream(...)
     """
     global _spark_client #赋值外部变量声明-直接用外面那个声明好的
-    if _spark_client is None:
+    if _spark_client is None: #如果没有创建过
         _spark_client = SparkClient(
             app_id=settings.spark_app_id,
             api_key=settings.spark_api_key,
