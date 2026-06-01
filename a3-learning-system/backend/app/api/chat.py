@@ -33,14 +33,18 @@ class ChatRequest(BaseModel):
 # ============================================================
 # 工具函数
 # ============================================================
-def _optional_user(authorization: str | None = Header(None), db=Depends(SessionLocal)):
+def _optional_user(authorization: str | None = Header(None)):
     """可选认证：有 token 就解析用户，没有就返回 None"""
     if not authorization or not authorization.startswith("Bearer "):
         return None
     payload = decode_access_token(authorization[7:])
     if not payload:
         return None
-    return db.query(User).filter(User.id == int(payload["sub"])).first()
+    db = SessionLocal()
+    try:
+        return db.query(User).filter(User.id == int(payload["sub"])).first()
+    finally:
+        db.close()
 
 
 def _load_profile(user_id: int) -> dict | None:

@@ -44,12 +44,13 @@ def question_agent_node(state: AgentState, spark: SparkClient) -> dict:
     profile = state.get("user_profile") or {}
     context = state.get("context", {})
     topic = context.get("topic", "基础测试")
-    kb = profile.get("knowledge_base", {"未评估": "未知"})
+    kb = profile.get("knowledge_base", {"未评估": "未知"}) #取不到就填默认
 
     # 自适应难度：从 agent_outputs 里看之前答题记录
-    outputs = state.get("agent_outputs", {})
+    outputs = state.get("agent_outputs", {}) 
     prev = outputs.get("question_agent", {})
     correct_streak = prev.get("correct_streak", 0)
+    #难度评级
     if correct_streak >= 2:
         difficulty = "较难"
     elif prev.get("last_wrong"):
@@ -57,6 +58,7 @@ def question_agent_node(state: AgentState, spark: SparkClient) -> dict:
     else:
         difficulty = "中等"
 
+    #构建prompt
     messages = [{"role": "system", "content": QUESTION_PROMPT.format(
         knowledge_base=str(kb),
         cognitive_style=profile.get("cognitive_style", "未知"),
@@ -78,7 +80,7 @@ def question_agent_node(state: AgentState, spark: SparkClient) -> dict:
         "current_agent": "question_agent",
         "stream_buffer": buffered,
         "agent_outputs": {
-            **outputs,
+            **outputs, #解包上次信息
             "question_agent": {"difficulty": difficulty, "topic": topic, "content": buffered},
         },
     }

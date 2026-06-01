@@ -41,13 +41,14 @@ PATH_PROMPT = """你是一个学习路径规划专家。根据学生的学习画
 
 
 def path_agent_node(state: AgentState, spark: SparkClient) -> dict:
+
     profile = state.get("user_profile") or {}
     context = state.get("context", {})
     topic = context.get("topic", state["messages"][-1].content if state["messages"] else "构建学习计划")
     kb = profile.get("knowledge_base", {"未评估": "未知"})
     weekly = profile.get("weekly_hours", "不确定")
 
-    messages = [{"role": "system", "content": PATH_PROMPT.format(
+    messages = [{"role": "system", "content": PATH_PROMPT.format( #对应插槽填入信息
         knowledge_base=str(kb),
         learning_goal=profile.get("learning_goal", "技能提升"),
         weekly_hours=weekly,

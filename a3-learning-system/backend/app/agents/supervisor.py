@@ -82,9 +82,9 @@ def build_graph(spark: SparkClient) -> StateGraph:
     workflow.add_node("supervisor" #节点名
                       , lambda s: supervisor_node(s, spark) #lambda节点函数-langgraph运行时再执行
                     )
-    # 画像 Agent（真实实现）
+    # 画像 Agent
     workflow.add_node("profile_agent", lambda s: profile_agent_node(s, spark))
-    # 资源 Agent（真实实现）
+    # 资源 Agent
     workflow.add_node("resource_agent", lambda s: resource_agent_node(s, spark))
     # 出题 Agent
     workflow.add_node("question_agent", lambda s: question_agent_node(s, spark))

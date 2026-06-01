@@ -44,7 +44,7 @@ def evaluation_agent_node(state: AgentState, spark: SparkClient) -> dict:
         f"- 易错模式：{profile.get('error_patterns', '未填写')}",
         f"- 偏好资源：{profile.get('preferred_resource_type', '未填写')}",
     ]
-    profile_summary = "\n".join(parts)
+    profile_summary = "\n".join(parts) #把列表的每个元素用分隔符连成字符串
 
     messages = [{"role": "system", "content": EVALUATION_PROMPT.format(profile_summary=profile_summary)}]
 
