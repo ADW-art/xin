@@ -1,0 +1,47 @@
+{
+  "domain": "database", "name": "数据库技术", "cs2023_area": "DM",
+  "description": "从SQL到分布式数据库的完整知识体系, 4层递进设计", "version": "2.0",
+  "phases": [
+    {"id": "foundation", "name": "SQL基础", "order": 1, "blooms": "understand/apply"},
+    {"id": "core", "name": "核心原理", "order": 2, "blooms": "apply/analyze"},
+    {"id": "advanced", "name": "进阶优化", "order": 3, "blooms": "analyze/evaluate"},
+    {"id": "practice", "name": "工程实战", "order": 4, "blooms": "create"}
+  ],
+  "nodes": [
+    {"id": "db:relational", "name": "关系模型与数据库概述", "phase": "foundation", "difficulty": 1, "blooms": "understand", "hours": 3, "description": "关系代数、ER图、表/行/列/主键/外键、三大范式", "keywords": ["关系模型", "ER图", "主键", "外键", "范式", "数据库"]},
+    {"id": "db:sql_ddl_dml", "name": "SQL：DDL与DML", "phase": "foundation", "difficulty": 2, "blooms": "apply", "hours": 4, "description": "CREATE/DROP/ALTER、INSERT/UPDATE/DELETE、数据类型与约束", "keywords": ["SQL", "DDL", "DML", "CREATE", "INSERT", "约束"]},
+    {"id": "db:sql_select", "name": "SQL：SELECT查询", "phase": "foundation", "difficulty": 2, "blooms": "apply", "hours": 5, "description": "WHERE/ORDER BY/LIMIT、聚合函数COUNT/SUM/AVG、GROUP BY/HAVING、DISTINCT", "keywords": ["SELECT", "WHERE", "GROUP BY", "聚合", "COUNT", "HAVING", "SQL查询"]},
+    {"id": "db:sql_join", "name": "多表连接JOIN", "phase": "foundation", "difficulty": 3, "blooms": "apply", "hours": 4, "description": "INNER/LEFT/RIGHT/FULL JOIN、自连接、子查询与CTE、UNION", "keywords": ["JOIN", "INNER JOIN", "LEFT JOIN", "子查询", "CTE", "UNION", "连接"]},
+    {"id": "db:transaction", "name": "事务与ACID", "phase": "core", "difficulty": 3, "blooms": "understand", "hours": 4, "description": "事务ACID特性、隔离级别(READ UNCOMMITTED→SERIALIZABLE)、脏读/不可重复读/幻读", "keywords": ["事务", "ACID", "隔离级别", "脏读", "幻读", "不可重复读"]},
+    {"id": "db:mvcc", "name": "MVCC多版本并发控制", "phase": "core", "difficulty": 4, "blooms": "analyze", "hours": 4, "description": "MVCC实现原理(undo log/ReadView)、InnoDB行锁/间隙锁/临键锁", "keywords": ["MVCC", "并发", "行锁", "间隙锁", "undo", "InnoDB"]},
+    {"id": "db:index", "name": "索引原理与B+树", "phase": "core", "difficulty": 4, "blooms": "analyze", "hours": 5, "description": "B+树结构、聚簇索引vs二级索引、覆盖索引、最左前缀原则、执行计划EXPLAIN", "keywords": ["索引", "B+树", "聚簇索引", "覆盖索引", "EXPLAIN", "最左前缀"]},
+    {"id": "db:optimization", "name": "SQL调优与慢查询", "phase": "advanced", "difficulty": 4, "blooms": "evaluate", "hours": 4, "description": "慢查询日志分析、索引优化策略、分页优化(延迟关联)、大表DDL方案", "keywords": ["调优", "慢查询", "优化", "执行计划", "分页", "大表"]},
+    {"id": "db:mysql_arch", "name": "MySQL架构与InnoDB", "phase": "advanced", "difficulty": 4, "blooms": "analyze", "hours": 5, "description": "MySQL Server层/引擎层架构、InnoDB内存结构(Buffer Pool/Change Buffer)、redo log/binlog/undo log", "keywords": ["MySQL", "InnoDB", "Buffer Pool", "redo", "binlog", "undo", "架构"]},
+    {"id": "db:replication", "name": "主从复制与高可用", "phase": "advanced", "difficulty": 4, "blooms": "analyze", "hours": 4, "description": "主从复制原理(binlog relay)、读写分离、半同步复制、MGR组复制", "keywords": ["主从", "复制", "读写分离", "binlog", "高可用", "MGR"]},
+    {"id": "db:sharding", "name": "分库分表策略", "phase": "practice", "difficulty": 5, "blooms": "evaluate", "hours": 4, "description": "垂直/水平拆分、sharding key选择、跨分片查询、全局ID生成(雪花算法)", "keywords": ["分库分表", "sharding", "拆分", "雪花算法", "跨分片", "分布式"]},
+    {"id": "db:redis", "name": "Redis缓存技术", "phase": "practice", "difficulty": 3, "blooms": "apply", "hours": 5, "description": "5种数据结构(string/hash/list/set/zset)、RDB/AOF持久化、哨兵/Cluster、缓存穿透/击穿/雪崩", "keywords": ["Redis", "缓存", "RDB", "AOF", "哨兵", "穿透", "击穿", "雪崩"]},
+    {"id": "db:orm", "name": "ORM与数据库连接池", "phase": "practice", "difficulty": 2, "blooms": "apply", "hours": 3, "description": "SQLAlchemy/GORM使用、N+1问题、连接池配置(HikariCP/Pool大小计算)", "keywords": ["ORM", "SQLAlchemy", "连接池", "N+1", "HikariCP"]},
+    {"id": "db:dist_tx", "name": "分布式事务与NewSQL", "phase": "practice", "difficulty": 5, "blooms": "evaluate", "hours": 4, "description": "2PC/TCC/SAGA分布式事务、TiDB/CockroachDB架构、CAP权衡", "keywords": ["分布式事务", "2PC", "TCC", "SAGA", "TiDB", "CAP", "NewSQL"]}
+  ],
+  "edges": [
+    {"source": "db:relational", "target": "db:sql_ddl_dml", "relation": "prerequisite"},
+    {"source": "db:sql_ddl_dml", "target": "db:sql_select", "relation": "prerequisite"},
+    {"source": "db:sql_select", "target": "db:sql_join", "relation": "extends"},
+    {"source": "db:sql_ddl_dml", "target": "db:transaction", "relation": "prerequisite"},
+    {"source": "db:transaction", "target": "db:mvcc", "relation": "extends"},
+    {"source": "db:sql_select", "target": "db:index", "relation": "prerequisite"},
+    {"source": "db:index", "target": "db:optimization", "relation": "extends"},
+    {"source": "db:mvcc", "target": "db:mysql_arch", "relation": "prerequisite"},
+    {"source": "db:mysql_arch", "target": "db:replication", "relation": "extends"},
+    {"source": "db:replication", "target": "db:sharding", "relation": "extends"},
+    {"source": "db:optimization", "target": "db:redis", "relation": "prerequisite"},
+    {"source": "db:sql_select", "target": "db:orm", "relation": "prerequisite"},
+    {"source": "db:sharding", "target": "db:dist_tx", "relation": "extends"}
+  ],
+  "cross_domain_edges": [
+    {"source": "algo:hashtable", "target": "db:redis", "relation": "enables", "description": "哈希表原理是Redis数据结构的底层基础"},
+    {"source": "algo:balancedtree", "target": "db:index", "relation": "enables", "description": "B+树是数据库索引的核心数据结构"},
+    {"source": "net:tcp", "target": "db:replication", "relation": "complements", "description": "TCP连接管理是主从复制通信的基础"}
+  ],
+  "nodes_count": 14, "edges_count": 13, "cross_edges_count": 3
+}

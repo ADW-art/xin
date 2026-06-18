@@ -17,6 +17,7 @@ import 'element-plus/dist/index.css'
 import './styles/global.css'
 import App from './App.vue'
 import router from './router'
+import { useProgressBar } from './composables/useProgressBar'
 
 const app = createApp(App)
 app.use(createPinia())
@@ -26,5 +27,14 @@ app.use(ElementPlus)
 for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
   app.component(key, component)
 }
+
+// 全局路由进度条
+const { start, finish } = useProgressBar()
+router.beforeEach((_to, _from) => {
+  start()
+})
+router.afterEach(() => {
+  finish()
+})
 
 app.mount('#app')

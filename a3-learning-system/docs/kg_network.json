@@ -1,0 +1,48 @@
+{
+  "domain": "network", "name": "计算机网络", "cs2023_area": "NC",
+  "description": "从物理层到应用层的完整网络协议知识体系, 4层递进设计", "version": "2.0",
+  "phases": [
+    {"id": "foundation", "name": "基础概念", "order": 1, "blooms": "understand"},
+    {"id": "core", "name": "核心协议", "order": 2, "blooms": "apply"},
+    {"id": "advanced", "name": "进阶与编程", "order": 3, "blooms": "analyze"},
+    {"id": "practice", "name": "架构与安全", "order": 4, "blooms": "evaluate/create"}
+  ],
+  "nodes": [
+    {"id": "net:overview", "name": "计算机网络概述与分层模型", "phase": "foundation", "difficulty": 1, "blooms": "understand", "hours": 3, "description": "OSI七层模型、TCP/IP四层模型、协议栈、封装与解封装", "keywords": ["网络", "OSI", "TCP/IP", "分层", "协议栈", "封装"]},
+    {"id": "net:physical", "name": "物理层与数据通信基础", "phase": "foundation", "difficulty": 1, "blooms": "understand", "hours": 2, "description": "信号编码、传输介质、带宽/时延、奈奎斯特定理、香农定理", "keywords": ["物理层", "信号", "带宽", "时延", "奈奎斯特", "香农"]},
+    {"id": "net:datalink", "name": "数据链路层与MAC", "phase": "foundation", "difficulty": 2, "blooms": "understand", "hours": 4, "description": "帧结构、MAC地址、CSMA/CD、以太网帧格式、交换机原理", "keywords": ["链路层", "MAC", "CSMA/CD", "以太网", "交换机", "帧"]},
+    {"id": "net:vlan", "name": "VLAN与STP生成树", "phase": "core", "difficulty": 3, "blooms": "apply", "hours": 3, "description": "VLAN划分/Trunk、STP/RSTP、广播域隔离、环路防止", "keywords": ["VLAN", "STP", "Trunk", "广播域", "生成树", "环路"]},
+    {"id": "net:ip", "name": "网络层与IP协议", "phase": "core", "difficulty": 3, "blooms": "apply", "hours": 5, "description": "IPv4地址分类、子网划分CIDR、IP数据报格式、分片重组、NAT", "keywords": ["IP", "IPv4", "子网", "CIDR", "NAT", "分片", "IP地址"]},
+    {"id": "net:icmp_arp", "name": "ICMP/ARP地址解析", "phase": "core", "difficulty": 2, "blooms": "apply", "hours": 3, "description": "ICMP差错报告(ping/traceroute)、ARP请求/响应、ARP欺骗与防御", "keywords": ["ICMP", "ARP", "ping", "traceroute", "ARP欺骗", "地址解析"]},
+    {"id": "net:routing", "name": "路由算法与路由协议", "phase": "advanced", "difficulty": 4, "blooms": "analyze", "hours": 5, "description": "RIP距离向量、OSPF链路状态(SPF)、BGP路径向量、路由表构建", "keywords": ["路由", "RIP", "OSPF", "BGP", "路由表", "距离向量", "链路状态"]},
+    {"id": "net:udp", "name": "传输层：UDP协议", "phase": "core", "difficulty": 2, "blooms": "apply", "hours": 2, "description": "UDP无连接特性、校验和、适用场景(DNS/流媒体/游戏)", "keywords": ["UDP", "无连接", "校验和", "DNS", "流媒体"]},
+    {"id": "net:tcp", "name": "传输层：TCP协议详解", "phase": "core", "difficulty": 4, "blooms": "analyze", "hours": 6, "description": "三次握手/四次挥手、滑动窗口、慢启动/拥塞避免/快速重传、TIME_WAIT", "keywords": ["TCP", "三次握手", "四次挥手", "拥塞控制", "滑动窗口", "TIME_WAIT", "快速重传"]},
+    {"id": "net:dns", "name": "应用层：DNS域名系统", "phase": "core", "difficulty": 2, "blooms": "apply", "hours": 3, "description": "DNS解析流程(递归/迭代)、记录类型(A/AAAA/CNAME/MX)、DNS缓存与CDN", "keywords": ["DNS", "域名", "A记录", "CNAME", "递归", "迭代", "CDN"]},
+    {"id": "net:http", "name": "应用层：HTTP协议族", "phase": "core", "difficulty": 3, "blooms": "apply", "hours": 5, "description": "HTTP/1.1请求响应、状态码、Cookie/Session、HTTPS与TLS握手、HTTP/2多路复用、HTTP/3 QUIC", "keywords": ["HTTP", "HTTPS", "TLS", "SSL", "Cookie", "HTTP/2", "QUIC", "状态码", "REST"]},
+    {"id": "net:websocket", "name": "WebSocket实时通信", "phase": "advanced", "difficulty": 3, "blooms": "apply", "hours": 2, "description": "WebSocket握手升级、全双工通信、心跳保活、与HTTP长轮询对比", "keywords": ["WebSocket", "全双工", "实时", "长轮询", "心跳", "SSE"]},
+    {"id": "net:socket", "name": "Socket网络编程", "phase": "advanced", "difficulty": 3, "blooms": "apply", "hours": 5, "description": "TCP/UDP Socket API、阻塞/非阻塞IO、select/poll/epoll多路复用", "keywords": ["Socket", "套接字", "epoll", "select", "非阻塞", "IO多路复用", "网络编程"]},
+    {"id": "net:security", "name": "网络安全基础", "phase": "practice", "difficulty": 3, "blooms": "evaluate", "hours": 4, "description": "对称/非对称加密、TLS握手过程、证书链验证、常见攻击(DDoS/SYN Flood/DNS劫持)", "keywords": ["安全", "TLS", "加密", "证书", "DDoS", "SYN", "HTTPS"]},
+    {"id": "net:architecture", "name": "网络架构设计", "phase": "practice", "difficulty": 4, "blooms": "create", "hours": 4, "description": "CDN内容分发、反向代理/负载均衡(Nginx/LVS)、微服务通信(gRPC/消息队列)、CAP理论", "keywords": ["架构", "CDN", "负载均衡", "Nginx", "反向代理", "gRPC", "CAP"]}
+  ],
+  "edges": [
+    {"source": "net:overview", "target": "net:physical", "relation": "prerequisite"},
+    {"source": "net:physical", "target": "net:datalink", "relation": "prerequisite"},
+    {"source": "net:datalink", "target": "net:vlan", "relation": "extends"},
+    {"source": "net:datalink", "target": "net:ip", "relation": "prerequisite"},
+    {"source": "net:ip", "target": "net:icmp_arp", "relation": "prerequisite"},
+    {"source": "net:ip", "target": "net:routing", "relation": "extends"},
+    {"source": "net:ip", "target": "net:udp", "relation": "prerequisite"},
+    {"source": "net:udp", "target": "net:tcp", "relation": "prerequisite"},
+    {"source": "net:tcp", "target": "net:dns", "relation": "prerequisite"},
+    {"source": "net:tcp", "target": "net:http", "relation": "prerequisite"},
+    {"source": "net:http", "target": "net:websocket", "relation": "extends"},
+    {"source": "net:tcp", "target": "net:socket", "relation": "prerequisite"},
+    {"source": "net:http", "target": "net:security", "relation": "prerequisite"},
+    {"source": "net:security", "target": "net:architecture", "relation": "prerequisite"}
+  ],
+  "cross_domain_edges": [
+    {"source": "net:tcp", "target": "system:process", "relation": "complements", "description": "TCP连接与操作系统进程/线程模型相关"},
+    {"source": "net:http", "target": "db:sql", "relation": "complements", "description": "HTTP API是数据库应用层入口"}
+  ],
+  "nodes_count": 15, "edges_count": 14, "cross_edges_count": 2
+}

@@ -1,0 +1,230 @@
+{
+  "summary": {
+    "recall": 0.767,
+    "precision": 0.85,
+    "accuracy": 0.0,
+    "hallucination": 0.65
+  },
+  "details": [
+    {
+      "id": 1,
+      "question": "C语言中指针是什么，如何使用",
+      "recall": 1.0,
+      "precision": 0.857,
+      "accuracy": 0.0,
+      "hallucination": 0.75,
+      "latency_ms": 21233,
+      "result_count": 7,
+      "answer_preview": "生成失败"
+    },
+    {
+      "id": 2,
+      "question": "C语言的数组和指针有什么关系",
+      "recall": 0.75,
+      "precision": 1.0,
+      "accuracy": 0.0,
+      "hallucination": 1.0,
+      "latency_ms": 457,
+      "result_count": 7,
+      "answer_preview": "生成失败"
+    },
+    {
+      "id": 3,
+      "question": "C语言中结构体如何定义和使用",
+      "recall": 1.0,
+      "precision": 0.714,
+      "accuracy": 0.0,
+      "hallucination": 0.75,
+      "latency_ms": 367,
+      "result_count": 7,
+      "answer_preview": "生成失败"
+    },
+    {
+      "id": 4,
+      "question": "二分查找算法的原理是什么",
+      "recall": 1.0,
+      "precision": 1.0,
+      "accuracy": 0.0,
+      "hallucination": 0.75,
+      "latency_ms": 488,
+      "result_count": 7,
+      "answer_preview": "生成失败"
+    },
+    {
+      "id": 5,
+      "question": "快速排序算法的基本思想和步骤",
+      "recall": 0.25,
+      "precision": 0.714,
+      "accuracy": 0.0,
+      "hallucination": 0.75,
+      "latency_ms": 374,
+      "result_count": 7,
+      "answer_preview": "生成失败"
+    },
+    {
+      "id": 6,
+      "question": "什么是广度优先搜索BFS",
+      "recall": 1.0,
+      "precision": 1.0,
+      "accuracy": 0.0,
+      "hallucination": 0.75,
+      "latency_ms": 425,
+      "result_count": 7,
+      "answer_preview": "生成失败"
+    },
+    {
+      "id": 7,
+      "question": "动态规划的基本思想是什么",
+      "recall": 0.75,
+      "precision": 1.0,
+      "accuracy": 0.0,
+      "hallucination": 0.75,
+      "latency_ms": 350,
+      "result_count": 7,
+      "answer_preview": "生成失败"
+    },
+    {
+      "id": 8,
+      "question": "C语言中函数如何定义和调用",
+      "recall": 1.0,
+      "precision": 1.0,
+      "accuracy": 0.0,
+      "hallucination": 0.5,
+      "latency_ms": 310,
+      "result_count": 7,
+      "answer_preview": "生成失败"
+    },
+    {
+      "id": 9,
+      "question": "什么是栈和队列，它们有什么区别",
+      "recall": 1.0,
+      "precision": 0.714,
+      "accuracy": 0.0,
+      "hallucination": 0.5,
+      "latency_ms": 304,
+      "result_count": 7,
+      "answer_preview": "生成失败"
+    },
+    {
+      "id": 10,
+      "question": "二叉树的遍历方式有哪几种",
+      "recall": 0.5,
+      "precision": 1.0,
+      "accuracy": 0.0,
+      "hallucination": 0.5,
+      "latency_ms": 344,
+      "result_count": 7,
+      "answer_preview": "生成失败"
+    },
+    {
+      "id": 11,
+      "question": "C语言中内存如何动态分配",
+      "recall": 0.75,
+      "precision": 0.857,
+      "accuracy": 0.0,
+      "hallucination": 0.25,
+      "latency_ms": 339,
+      "result_count": 7,
+      "answer_preview": "生成失败"
+    },
+    {
+      "id": 12,
+      "question": "什么是递归函数，递归的优缺点",
+      "recall": 0.75,
+      "precision": 1.0,
+      "accuracy": 0.0,
+      "hallucination": 0.75,
+      "latency_ms": 320,
+      "result_count": 7,
+      "answer_preview": "生成失败"
+    },
+    {
+      "id": 13,
+      "question": "散列表（哈希表）的工作原理",
+      "recall": 0.5,
+      "precision": 1.0,
+      "accuracy": 0.0,
+      "hallucination": 0.5,
+      "latency_ms": 291,
+      "result_count": 7,
+      "answer_preview": "生成失败"
+    },
+    {
+      "id": 14,
+      "question": "链表和数组有什么区别",
+      "recall": 1.0,
+      "precision": 1.0,
+      "accuracy": 0.0,
+      "hallucination": 0.25,
+      "latency_ms": 256,
+      "result_count": 7,
+      "answer_preview": "生成失败"
+    },
+    {
+      "id": 15,
+      "question": "什么是贪心算法",
+      "recall": 0.5,
+      "precision": 0.429,
+      "accuracy": 0.0,
+      "hallucination": 0.25,
+      "latency_ms": 285,
+      "result_count": 7,
+      "answer_preview": "生成失败"
+    },
+    {
+      "id": 16,
+      "question": "C语言中文件读写操作的基本函数",
+      "recall": 0.75,
+      "precision": 0.286,
+      "accuracy": 0.0,
+      "hallucination": 0.75,
+      "latency_ms": 359,
+      "result_count": 7,
+      "answer_preview": "生成失败"
+    },
+    {
+      "id": 17,
+      "question": "什么是Dijkstra算法",
+      "recall": 0.75,
+      "precision": 0.857,
+      "accuracy": 0.0,
+      "hallucination": 1.0,
+      "latency_ms": 301,
+      "result_count": 7,
+      "answer_preview": "生成失败"
+    },
+    {
+      "id": 18,
+      "question": "C语言中预处理指令有哪些",
+      "recall": 1.0,
+      "precision": 1.0,
+      "accuracy": 0.0,
+      "hallucination": 0.75,
+      "latency_ms": 301,
+      "result_count": 7,
+      "answer_preview": "生成失败"
+    },
+    {
+      "id": 19,
+      "question": "冒泡排序和选择排序有什么区别",
+      "recall": 0.75,
+      "precision": 1.0,
+      "accuracy": 0.0,
+      "hallucination": 0.75,
+      "latency_ms": 475,
+      "result_count": 7,
+      "answer_preview": "生成失败"
+    },
+    {
+      "id": 20,
+      "question": "什么是堆数据结构",
+      "recall": 0.333,
+      "precision": 0.571,
+      "accuracy": 0.0,
+      "hallucination": 0.75,
+      "latency_ms": 284,
+      "result_count": 7,
+      "answer_preview": "生成失败"
+    }
+  ]
+}

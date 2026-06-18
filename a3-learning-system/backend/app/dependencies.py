@@ -31,6 +31,8 @@ def get_spark_client() -> SparkClient:
             app_id=settings.spark_app_id,
             api_key=settings.spark_api_key,
             api_secret=settings.spark_api_secret,
+            app_password=settings.spark_app_password,
+            model=settings.spark_model,
         )
     return _spark_client
 

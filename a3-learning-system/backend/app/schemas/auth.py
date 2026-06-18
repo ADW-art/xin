@@ -1,6 +1,7 @@
 '''
 类型校验--请求/响应格式定义
 '''
+from datetime import datetime
 from pydantic import BaseModel, Field
 
 
@@ -25,3 +26,4 @@ class UserResponse(BaseModel):
     username: str
     nickname: str | None
     avatar_url: str | None
+    created_at: datetime | None = None

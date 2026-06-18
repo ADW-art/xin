@@ -22,9 +22,24 @@ def _profile_to_response(p: LearningProfile) -> ProfileResponse:
         dimension_scores=p.dimension_scores,
     )
 
+# JSON fields that need deep merge instead of full replacement
+_JSON_MERGE_FIELDS = {'knowledge_base', 'error_patterns', 'dimension_scores'}
+
 #更新orm
 def _update_fields(p: LearningProfile, data: ProfileUpdate):
     for field, value in data.model_dump(exclude_unset=True).items(): #将模型转化为字典-只更新传了的字段
+        if field in _JSON_MERGE_FIELDS and value is not None:
+            existing = getattr(p, field, None) or {}
+            if isinstance(existing, dict) and isinstance(value, dict):
+                # deep merge: new keys override, omitted keys preserved
+                merged = dict(existing)
+                merged.update(value)
+                setattr(p, field, merged)
+                continue
+            if isinstance(existing, list) and isinstance(value, list):
+                # for error_patterns list, replace entirely when explicitly provided
+                setattr(p, field, value)
+                continue
         setattr(p, field, value) #设置动态对象属性  p.field=value
 
 #获取画像

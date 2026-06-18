@@ -1,35 +1,84 @@
-'''
-项目安全模块--封装方法:密码加密+jwt令牌
-'''
-from datetime import datetime, timedelta#时间加减运算
-from typing import Any#任何类型
+"""
+安全模块
 
-from jose import jwt #创建+认证jwt令牌
-from passlib.context import CryptContext #密码加密+认证
-from app.config import settings #读取配置项
+作用：
+  提供密码加密/验证和 JWT 令牌的创建/解析/黑名单检查功能
 
-#bcrypt密码哈希加密算法
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto") #方案列表-自动弃用算法+升级
+关联文件：
+  api/auth.py  ← 注册/登录/登出接口依赖本模块
+  api/chat.py  ← 解析 JWT 做可选认证
+"""
+import uuid
+from datetime import datetime, timedelta
+from typing import Any
 
-#加密
+from jose import jwt
+from passlib.context import CryptContext
+from app.config import settings
+
+# bcrypt 密码哈希算法
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
 def hash_password(password: str) -> str:
+    """对明文密码进行 bcrypt 加密"""
     return pwd_context.hash(password)
 
-#验证密码(同样方法加密后能否完全匹配)
+
 def verify_password(plain: str, hashed: str) -> bool:
+    """验证明文密码是否与哈希值匹配"""
     return pwd_context.verify(plain, hashed)
 
-#创建jwt令牌
-def create_access_token(data: dict[str, Any], expires_delta: timedelta | None = None) -> str:#写入数据-过期时间
-    to_encode = data.copy()#复制
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=settings.jwt_expire_minutes))#计算过期时间
-    to_encode.update({"exp": expire}) #添加字段过期时间
-    return jwt.encode(to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
-    #令牌+配置项读到的密钥+签名算法
 
-#解析jwt令牌
+def create_access_token(data: dict[str, Any], expires_delta: timedelta | None = None) -> str:
+    """创建 JWT 访问令牌（含 jti 唯一标识，用于登出黑名单）"""
+    to_encode = data.copy()
+    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=settings.jwt_expire_minutes))
+    to_encode.update({"exp": expire, "jti": uuid.uuid4().hex})
+    return jwt.encode(to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+
+
 def decode_access_token(token: str) -> dict[str, Any] | None:
+    """解析 JWT 令牌，失败返回 None"""
     try:
         return jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
     except Exception:
         return None
+
+
+def is_token_blacklisted(jti: str) -> bool:
+    """检查 JWT token 是否在黑名单中（Redis 存储）
+
+    用于登出后阻止旧 token 继续使用。
+    Redis 不可用时降级为允许（不阻塞正常请求）。
+    """
+    if not jti:
+        return False
+    try:
+        import redis
+        r = redis.from_url(settings.redis_url)
+        return bool(r.exists(f"blacklist:{jti}"))
+    except Exception:
+        return False  # Redis 不可用时降级为允许
+
+
+def add_to_blacklist(jti: str, expire_seconds: int | None = None) -> bool:
+    """将 token 的 jti 加入黑名单
+
+    Args:
+        jti: JWT ID
+        expire_seconds: 黑名单过期时间（秒），默认与 JWT 过期时间一致
+
+    Returns:
+        True 表示成功加入，False 表示操作失败（Redis 不可用）
+    """
+    if not jti:
+        return False
+    try:
+        import redis
+        r = redis.from_url(settings.redis_url)
+        expire = expire_seconds or (settings.jwt_expire_minutes * 60)
+        r.setex(f"blacklist:{jti}", expire, "1")
+        return True
+    except Exception:
+        return False

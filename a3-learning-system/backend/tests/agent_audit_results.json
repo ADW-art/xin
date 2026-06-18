@@ -1,0 +1,883 @@
+[
+  {
+    "message": "我想学闭包",
+    "elapsed": 1.7,
+    "agents_seen": [
+      "profile_agent"
+    ],
+    "agent_switches": [
+      {
+        "from": "supervisor",
+        "to": "profile_agent"
+      }
+    ],
+    "full_response": "好的，记录下来了 ✅\n\n下一个问题：回顾你之前的学习经历，有没有经常混淆或犯错的知识点？\n\n> 还剩 1 个问题，马上就完成~",
+    "resource_events": [],
+    "error_events": [],
+    "progress_events": [
+      {
+        "stage": "generating",
+        "agent": "profile_agent",
+        "progress": 0,
+        "message": "正在生成..."
+      },
+      {
+        "stage": "complete",
+        "agent": "profile_agent",
+        "progress": 100
+      }
+    ],
+    "done_status": {
+      "status": "complete",
+      "agent_switches": 1
+    },
+    "event_summary": [
+      {
+        "event": "agent_switch",
+        "data": "{'from': 'supervisor', 'to': 'profile_agent'}"
+      },
+      {
+        "event": "progress",
+        "data": "{'stage': 'generating', 'agent': 'profile_agent', 'progress': 0, 'message': '正在生成...'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '好的', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '，记', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '录下', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '来了', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': ' ✅', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '\\n\\n', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '下一', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '个问', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '题：', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '回顾', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '你之', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '前的', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '学习', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '经历', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '，有', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '没有', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '经常', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '混淆', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '或犯', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '错的', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '知识', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '点？', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '\\n\\n', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '> ', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '还剩', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': ' 1', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': ' 个', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '问题', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '，马', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '上就', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '完成', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '~', 'agent': 'profile_agent'}"
+      },
+      {
+        "event": "progress",
+        "data": "{'stage': 'complete', 'agent': 'profile_agent', 'progress': 100}"
+      },
+      {
+        "event": "done",
+        "data": "{'status': 'complete', 'agent_switches': 1}"
+      }
+    ]
+  },
+  {
+    "message": "闭包和装饰器区别是什么",
+    "elapsed": 4.2,
+    "agents_seen": [
+      "supervisor"
+    ],
+    "agent_switches": [],
+    "full_response": "好的，记录下来了 ✅\n\n下一个问题：在编程中，你最常使用哪种编程语言？\n\n> 还剩 1 个问题，马上就完成~",
+    "resource_events": [],
+    "error_events": [],
+    "progress_events": [
+      {
+        "stage": "generating",
+        "agent": "supervisor",
+        "progress": 0,
+        "message": "正在生成..."
+      },
+      {
+        "stage": "complete",
+        "agent": "supervisor",
+        "progress": 100
+      }
+    ],
+    "done_status": {
+      "status": "complete",
+      "agent_switches": 0
+    },
+    "event_summary": [
+      {
+        "event": "progress",
+        "data": "{'stage': 'generating', 'agent': 'supervisor', 'progress': 0, 'message': '正在生成...'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '好的', 'agent': 'supervisor'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '，记录下来', 'agent': 'supervisor'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '了 ✅', 'agent': 'supervisor'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '\\n\\n下一个问题', 'agent': 'supervisor'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '：在编程中，你', 'agent': 'supervisor'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '最', 'agent': 'supervisor'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '常使用哪种编程语言', 'agent': 'supervisor'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '？\\n\\n> ', 'agent': 'supervisor'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '还剩 1 个问题', 'agent': 'supervisor'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '，马上就完成~', 'agent': 'supervisor'}"
+      },
+      {
+        "event": "progress",
+        "data": "{'stage': 'complete', 'agent': 'supervisor', 'progress': 100}"
+      },
+      {
+        "event": "done",
+        "data": "{'status': 'complete', 'agent_switches': 0}"
+      }
+    ]
+  },
+  {
+    "message": "为什么闭包可以保存状态",
+    "elapsed": 5.1,
+    "agents_seen": [
+      "supervisor"
+    ],
+    "agent_switches": [],
+    "full_response": "好的，记录下来了 ✅\n\n下一个问题：在编程中，你最常使用哪种编程语言？",
+    "resource_events": [],
+    "error_events": [],
+    "progress_events": [
+      {
+        "stage": "generating",
+        "agent": "supervisor",
+        "progress": 0,
+        "message": "正在生成..."
+      },
+      {
+        "stage": "complete",
+        "agent": "supervisor",
+        "progress": 100
+      }
+    ],
+    "done_status": {
+      "status": "complete",
+      "agent_switches": 0
+    },
+    "event_summary": [
+      {
+        "event": "progress",
+        "data": "{'stage': 'generating', 'agent': 'supervisor', 'progress': 0, 'message': '正在生成...'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '好的', 'agent': 'supervisor'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '，记录下来', 'agent': 'supervisor'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '了 ✅', 'agent': 'supervisor'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '\\n\\n下一个问题', 'agent': 'supervisor'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '：在编程中，你', 'agent': 'supervisor'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '最', 'agent': 'supervisor'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '常使用哪种编程语言', 'agent': 'supervisor'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '？', 'agent': 'supervisor'}"
+      },
+      {
+        "event": "progress",
+        "data": "{'stage': 'complete', 'agent': 'supervisor', 'progress': 100}"
+      },
+      {
+        "event": "done",
+        "data": "{'status': 'complete', 'agent_switches': 0}"
+      }
+    ]
+  },
+  {
+    "message": "给我一道闭包练习题",
+    "elapsed": 7.7,
+    "agents_seen": [
+      "question_agent"
+    ],
+    "agent_switches": [
+      {
+        "from": "supervisor",
+        "to": "question_agent"
+      }
+    ],
+    "full_response": "### 第1题（选择题）\n以下关于Python装饰器的描述中，哪项是错误的？\nA. 装饰器可以修改函数的执行逻辑\nB. 装饰器可以用来增强函数的功能\nC. 装饰器只能用于函数\nD. 装饰器不能被赋值给变量\n答案：D\n解析：Python中的装饰器本质上是一个接受函数作为参数并返回一个新函数的函数。它允许我们扩展或修改现有函数的行为，但装饰器本身不是可赋值的对象，因此选项抱歉，检测到生成内容可能存在不准确或不适当的信息。\n\n建议您换个提问方式重新尝试，或者尝试以下操作：\n- 指定具体的学习知识点\n- 让我出几道练习题\n- 制定学习计划",
+    "resource_events": [],
+    "error_events": [],
+    "progress_events": [
+      {
+        "stage": "generating",
+        "agent": "question_agent",
+        "progress": 0,
+        "message": "正在生成..."
+      },
+      {
+        "stage": "complete",
+        "agent": "question_agent",
+        "progress": 100
+      }
+    ],
+    "done_status": {
+      "status": "complete",
+      "agent_switches": 1
+    },
+    "event_summary": [
+      {
+        "event": "agent_switch",
+        "data": "{'from': 'supervisor', 'to': 'question_agent'}"
+      },
+      {
+        "event": "progress",
+        "data": "{'stage': 'generating', 'agent': 'question_agent', 'progress': 0, 'message': '正在生成...'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '##', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '#', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': ' 第', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '1题（', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '选择题）\\n以下', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '关于Python装饰器的描述', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '中，哪项是错误的？', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '\\nA. 装饰器可以', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '修改函数的执行逻辑\\nB.', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': ' 装饰器可以用来增强函数的功能\\n', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': 'C. 装饰器只能用于函数', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '\\nD. 装饰器不能被', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '赋值给变量\\n答案：D\\n', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '解析：Python中的装饰器本质上是一个', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '接受函数作为参数并返回一个新函数', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '的函数。它允许我们扩展或', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '修改现有函数的行为，但装饰器', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '本身不是可赋值的对象，因此选项', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '抱歉，检测到生成内容可能存在不准确或不适当的信息。\\n\\n建议您换个提问方式重新尝试，或者尝试以下操作：\\n- 指定具体的学习知识点\\n- 让我出几道练习题\\n- 制定学习计划', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "progress",
+        "data": "{'stage': 'complete', 'agent': 'question_agent', 'progress': 100}"
+      },
+      {
+        "event": "done",
+        "data": "{'status': 'complete', 'agent_switches': 1}"
+      }
+    ]
+  },
+  {
+    "message": "我完全听不懂，请重新解释",
+    "elapsed": 11.4,
+    "agents_seen": [
+      "resource_agent"
+    ],
+    "agent_switches": [
+      {
+        "from": "supervisor",
+        "to": "resource_agent"
+      }
+    ],
+    "full_response": "**【重要】代码示例必须使用上下文中指定的编程语言（如果有），绝对不能随意切换语言！如果指定了C++就用C++，Java就用Java**\n\n---\n\n### 概述\n\n欢迎来到算法的世界！今天我们将深入探讨Python中的函数和装饰器。这两个概念是编程中的基础，理解它们对于掌握更复杂的编程技巧至关重要。\n\n### 核心概念\n\n#### 函数\n\n- **定义**：函数是一段可重复使用的抱歉，检测到生成内容可能存在不准确或不适当的信息。\n\n建议您换个提问方式重新尝试，或者尝试以下操作：\n- 指定具体的学习知识点\n- 让我出几道练习题\n- 制定学习计划",
+    "resource_events": [
+      {
+        "type": "resource",
+        "resource_type": "document",
+        "title": "我完全听不懂，请重新解释"
+      }
+    ],
+    "error_events": [],
+    "progress_events": [
+      {
+        "stage": "generating",
+        "agent": "resource_agent",
+        "progress": 0,
+        "message": "正在生成..."
+      },
+      {
+        "stage": "complete",
+        "agent": "resource_agent",
+        "progress": 100
+      }
+    ],
+    "done_status": {
+      "status": "complete",
+      "agent_switches": 1
+    },
+    "event_summary": [
+      {
+        "event": "agent_switch",
+        "data": "{'from': 'supervisor', 'to': 'resource_agent'}"
+      },
+      {
+        "event": "resource",
+        "data": "{'type': 'resource', 'resource_type': 'document', 'title': '我完全听不懂，请重新解释'}"
+      },
+      {
+        "event": "progress",
+        "data": "{'stage': 'generating', 'agent': 'resource_agent', 'progress': 0, 'message': '正在生成...'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '**', 'agent': 'resource_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '【重要', 'agent': 'resource_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '】代码示例', 'agent': 'resource_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '必须使用上下文中', 'agent': 'resource_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '指定的编程语言（如果有），', 'agent': 'resource_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '绝对不能随意切换语言！如果', 'agent': 'resource_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '指定了C++就用C++', 'agent': 'resource_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '，Java就用Java**\\n\\n---', 'agent': 'resource_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '\\n\\n### 概述\\n\\n欢迎', 'agent': 'resource_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '来到算法的世界！今天我们将深入探讨', 'agent': 'resource_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': 'Python中的函数和装饰器。这两个', 'agent': 'resource_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '概念是编程中的基础，理解它们', 'agent': 'resource_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '对于掌握更复杂的编程技巧至关重要。\\n', 'agent': 'resource_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '\\n', 'agent': 'resource_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '### 核心概念', 'agent': 'resource_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '\\n\\n#### 函数', 'agent': 'resource_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '\\n\\n- **定义**', 'agent': 'resource_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '：函数是一段可重复使用的', 'agent': 'resource_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '抱歉，检测到生成内容可能存在不准确或不适当的信息。\\n\\n建议您换个提问方式重新尝试，或者尝试以下操作：\\n- 指定具体的学习知识点\\n- 让我出几道练习题\\n- 制定学习计划', 'agent': 'resource_agent'}"
+      },
+      {
+        "event": "progress",
+        "data": "{'stage': 'complete', 'agent': 'resource_agent', 'progress': 100}"
+      },
+      {
+        "event": "done",
+        "data": "{'status': 'complete', 'agent_switches': 1}"
+      }
+    ]
+  },
+  {
+    "message": "我已经会了，下一步学什么",
+    "elapsed": 1.5,
+    "agents_seen": [
+      "path_agent"
+    ],
+    "agent_switches": [
+      {
+        "from": "supervisor",
+        "to": "path_agent"
+      }
+    ],
+    "full_response": "",
+    "resource_events": [],
+    "error_events": [],
+    "progress_events": [
+      {
+        "stage": "generating",
+        "agent": "path_agent",
+        "progress": 0,
+        "message": "正在生成..."
+      },
+      {
+        "stage": "complete",
+        "agent": "path_agent",
+        "progress": 100
+      }
+    ],
+    "done_status": {
+      "status": "complete",
+      "agent_switches": 1
+    },
+    "event_summary": [
+      {
+        "event": "agent_switch",
+        "data": "{'from': 'supervisor', 'to': 'path_agent'}"
+      },
+      {
+        "event": "progress",
+        "data": "{'stage': 'generating', 'agent': 'path_agent', 'progress': 0, 'message': '正在生成...'}"
+      },
+      {
+        "event": "progress",
+        "data": "{'stage': 'complete', 'agent': 'path_agent', 'progress': 100}"
+      },
+      {
+        "event": "done",
+        "data": "{'status': 'complete', 'agent_switches': 1}"
+      }
+    ]
+  },
+  {
+    "message": "我学的是Java，不要讲Python",
+    "elapsed": 4.7,
+    "agents_seen": [
+      "question_agent"
+    ],
+    "agent_switches": [
+      {
+        "from": "supervisor",
+        "to": "question_agent"
+      }
+    ],
+    "full_response": "### 第1题（选择题）\n题目内容：在Java中，以下哪个不是数组的常见用途？\nA. 存储一组数字\nB. 存储一组字符串\nC. 存储一组对象\nD. 存储一组图片\n答案：D\n解析：在Java中，数组主要用于存储固定数量的元素。它不适用于存储动态数据，如对象或图片。选项A、B和C描述的是数组的常见用途。\n\n---\n\n### 第2题（填空题）\n题目内容：请编写一个Java程序，使用Scanner类从控制台读取一行文本，并输出该文本的长度。\n答案：50\n解析：使用Scanner类可以方便地从控制台读取一行文本。根据输入的文本长度，输出相应的信息。\n\n---\n\n### 第3题（代码题）\n题目内容：创建一个Java方法，该方法接受两个整数参数，返回它们的和。\n```java\npublic int add(int a, int b) {\n    return a + b;\n}\n```\n请确保你的代码示例符合题目要求，并且只使用Java标准库中的函数和方法。\n答案：60\n解析：方法add接受两个整数参数a和b，返回它们的和。",
+    "resource_events": [],
+    "error_events": [],
+    "progress_events": [
+      {
+        "stage": "generating",
+        "agent": "question_agent",
+        "progress": 0,
+        "message": "正在生成..."
+      },
+      {
+        "stage": "complete",
+        "agent": "question_agent",
+        "progress": 100
+      }
+    ],
+    "done_status": {
+      "status": "complete",
+      "agent_switches": 1
+    },
+    "event_summary": [
+      {
+        "event": "agent_switch",
+        "data": "{'from': 'supervisor', 'to': 'question_agent'}"
+      },
+      {
+        "event": "progress",
+        "data": "{'stage': 'generating', 'agent': 'question_agent', 'progress': 0, 'message': '正在生成...'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '##', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '#', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': ' 第', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '1题（', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '选择题）\\n题目', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '内容：在Java中', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '，以下哪个不是数组的', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '常见用途？\\nA. ', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '存储一组数字\\nB. 存储', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '一组字符串\\nC. 存储一组', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '对象\\nD. 存储一组图片', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '\\n答案：D\\n解析：在', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': 'Java中，数组主要用于存储固定数量', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '的元素。它不适用于存储动态数据', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '，如对象或图片。选项A', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '、B和C描述的是数组的', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '常见用途。\\n\\n---\\n\\n', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '### 第2题（填空题', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '）\\n题目内容：请编写一个', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': 'Java程序，使用Scanner类从控制', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '台读取一行文本，并输出该', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '文本的长度。\\n答案：50', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '\\n解析：使用Scanner类可以方便', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '地从控制台读取一行文本。根据', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '输入', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '的文本长度，输出', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '相应的', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '信息。\\n\\n', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '---\\n\\n### ', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '第3题（代码题', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '）\\n题目内容：创建一个Java', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '方法，该方法接受两个整数参数，返回', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '它们的', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '和。\\n```', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': 'java\\npublic int add', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '(int a, int b', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': ') {\\n    return a +', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': ' b;\\n}\\n```\\n请', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '确保你的代码示例符合题目要求，并且', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '只', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '使用Java标准库', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '中的函数和方法。\\n', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '答案：60\\n解析', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': '：方法add接受两个整数参数', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "message",
+        "data": "{'content': 'a和b，返回它们的和。', 'agent': 'question_agent'}"
+      },
+      {
+        "event": "progress",
+        "data": "{'stage': 'complete', 'agent': 'question_agent', 'progress': 100}"
+      },
+      {
+        "event": "done",
+        "data": "{'status': 'complete', 'agent_switches': 1}"
+      }
+    ]
+  }
+]

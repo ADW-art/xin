@@ -34,7 +34,7 @@ services:
       - minio_data:/data
 
   chromadb:
-    image: chromadb/chroma:latest
+    image: chromadb/chroma:0.5.20
     container_name: a3-chromadb
     ports:
       - "8000:8000"

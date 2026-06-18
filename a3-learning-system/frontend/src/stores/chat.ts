@@ -19,8 +19,12 @@ export interface ChatMessage {
   id: string                          // 消息唯一 ID（用 crypto.randomUUID() 生成）
   role: 'user' | 'assistant'          // 消息角色：用户还是 AI
   content: string                     // 消息文本内容（Markdown 格式）
+  images?: string[]                   // 用户消息中的图片（data URL 列表）— 多模态
   agent?: string                      // 产生此消息的 Agent 名称
   agentSwitch?: { from: string; to: string }  // Agent 切换信息（显示切换提示）
+  resourceType?: string               // 生成的资源类型（mindmap/code_example/document/question_set/video_script）
+  resourceId?: number                 // 生成的资源ID
+  resourceTitle?: string              // 生成的资源标题
   createdAt: number                   // 创建时间戳（Date.now()）
 }
 
@@ -35,11 +39,12 @@ export const useChatStore = defineStore('chat', () => {
   // ============ 操作方法 ============
 
   // 添加用户消息到列表
-  function addUserMessage(content: string) {
+  function addUserMessage(content: string, images?: string[]) {
     messages.value.push({
       id: crypto.randomUUID(),             // 生成全局唯一 ID
       role: 'user',
       content,
+      images,                               // 多模态图片
       createdAt: Date.now(),
     })
   }
@@ -82,6 +87,17 @@ export const useChatStore = defineStore('chat', () => {
     streamingMsgId = ''                    // 清空当前消息 ID
   }
 
+  // 将资源信息附加到当前流式消息上
+  function setResource(resourceType: string, resourceId: number, resourceTitle: string) {
+    const msg = messages.value.find((m) => m.id === streamingMsgId)
+    if (msg) {
+      msg.resourceType = resourceType
+      msg.resourceId = resourceId
+      msg.resourceTitle = resourceTitle
+      if (!msg.agent) msg.agent = 'resource_agent'
+    }
+  }
+
   // 清空所有消息
   function clearMessages() {
     messages.value = []
@@ -96,6 +112,7 @@ export const useChatStore = defineStore('chat', () => {
     startAssistantReply,
     appendToStreaming,
     setAgentSwitch,
+    setResource,
     finishAssistantReply,
     clearMessages,
   }

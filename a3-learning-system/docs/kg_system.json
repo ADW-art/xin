@@ -1,0 +1,47 @@
+{
+  "domain": "system", "name": "计算机系统基础", "cs2023_area": "AR / OS / SF",
+  "description": "从硬件到OS到编译原理的CS底层知识体系, 4层递进设计", "version": "2.0",
+  "phases": [
+    {"id": "foundation", "name": "数据表示与指令", "order": 1, "blooms": "understand"},
+    {"id": "core", "name": "处理器与存储", "order": 2, "blooms": "apply"},
+    {"id": "advanced", "name": "操作系统核心", "order": 3, "blooms": "analyze"},
+    {"id": "practice", "name": "编译与工程", "order": 4, "blooms": "evaluate/create"}
+  ],
+  "nodes": [
+    {"id": "sys:data_rep", "name": "信息的表示与处理", "phase": "foundation", "difficulty": 2, "blooms": "understand", "hours": 3, "description": "整数/浮点数编码(IEEE754)、大小端、位运算、溢出", "keywords": ["编码", "IEEE754", "大小端", "位运算", "溢出", "补码"]},
+    {"id": "sys:isa", "name": "指令系统架构ISA", "phase": "foundation", "difficulty": 3, "blooms": "understand", "hours": 4, "description": "x86/ARM/RISC-V指令集对比、寻址模式、CISC vs RISC、汇编基础", "keywords": ["ISA", "x86", "ARM", "RISC-V", "汇编", "指令集", "寻址"]},
+    {"id": "sys:processor", "name": "处理器体系结构", "phase": "core", "difficulty": 4, "blooms": "analyze", "hours": 5, "description": "SEQ顺序处理器、流水线(5级)、数据/控制冒险与转发、分支预测", "keywords": ["处理器", "流水线", "冒险", "转发", "分支预测", "CPI"]},
+    {"id": "sys:memory_hierarchy", "name": "存储器层次结构", "phase": "core", "difficulty": 4, "blooms": "analyze", "hours": 5, "description": "SRAM/DRAM、Cache映射(直接/组相联/全相联)、写策略(write-through/write-back)、局部性原理", "keywords": ["Cache", "SRAM", "DRAM", "组相联", "局部性", "缺失率"]},
+    {"id": "sys:virtual_memory", "name": "虚拟内存管理", "phase": "core", "difficulty": 4, "blooms": "analyze", "hours": 5, "description": "页表/多级页表、TLB快表、页错误处理、mmap系统调用", "keywords": ["虚拟内存", "页表", "TLB", "页错误", "mmap", "地址翻译"]},
+    {"id": "sys:process", "name": "进程与线程模型", "phase": "advanced", "difficulty": 3, "blooms": "analyze", "hours": 5, "description": "进程状态转换、fork/exec、线程vs进程、上下文切换开销、协程概念", "keywords": ["进程", "线程", "fork", "上下文切换", "协程", "并发"]},
+    {"id": "sys:scheduling", "name": "进程调度算法", "phase": "advanced", "difficulty": 3, "blooms": "analyze", "hours": 3, "description": "FCFS/SJF/RR/多级反馈队列调度、CFS完全公平调度(Linux)、实时调度", "keywords": ["调度", "FCFS", "SJF", "RR", "CFS", "多级反馈", "优先级"]},
+    {"id": "sys:sync", "name": "同步与死锁", "phase": "advanced", "difficulty": 4, "blooms": "analyze", "hours": 4, "description": "互斥锁/自旋锁/读写锁、信号量、死锁四条件、银行家算法", "keywords": ["同步", "锁", "互斥", "信号量", "死锁", "银行家", "PV操作"]},
+    {"id": "sys:filesystem", "name": "文件系统设计", "phase": "advanced", "difficulty": 3, "blooms": "analyze", "hours": 3, "description": "inode/目录项、ext4/NTFS/APFS、VFS虚拟文件系统、日志/写时复制", "keywords": ["文件系统", "inode", "ext4", "VFS", "日志", "写时复制"]},
+    {"id": "sys:io", "name": "I/O子系统", "phase": "advanced", "difficulty": 3, "blooms": "analyze", "hours": 3, "description": "DMA直接内存访问、中断处理、块设备IO栈、IO调度算法", "keywords": ["IO", "DMA", "中断", "块设备", "调度", "轮询"]},
+    {"id": "sys:compile_frontend", "name": "编译器前端：词法与语法分析", "phase": "practice", "difficulty": 4, "blooms": "apply", "hours": 5, "description": "正则→NFA→DFA词法分析、LL(1)/LR(1)语法分析、递归下降、AST抽象语法树", "keywords": ["编译", "词法", "语法", "LL", "LR", "AST", "递归下降"]},
+    {"id": "sys:compile_backend", "name": "编译器后端：优化与代码生成", "phase": "practice", "difficulty": 5, "blooms": "evaluate", "hours": 5, "description": "中间表示IR(LLVM IR)、死代码消除/常量传播/内联优化、寄存器分配(图着色)、指令选择", "keywords": ["编译优化", "LLVM", "IR", "寄存器", "内联", "死代码", "SSA"]},
+    {"id": "sys:linker", "name": "链接与加载", "phase": "practice", "difficulty": 3, "blooms": "apply", "hours": 3, "description": "静态链接/动态链接、符号解析、重定位、PLT/GOT、ld.so加载器", "keywords": ["链接", "加载", "符号", "重定位", "PLT", "GOT", "动态库"]},
+    {"id": "sys:perf", "name": "系统性能分析", "phase": "practice", "difficulty": 4, "blooms": "evaluate", "hours": 4, "description": "perf/火焰图、CPU缓存优化(False Sharing/对齐)、内存分析(valgrind)、编译优化等级", "keywords": ["性能", "perf", "火焰图", "valgrind", "优化", "profiling", "缓存"]}
+  ],
+  "edges": [
+    {"source": "sys:data_rep", "target": "sys:isa", "relation": "prerequisite"},
+    {"source": "sys:isa", "target": "sys:processor", "relation": "prerequisite"},
+    {"source": "sys:processor", "target": "sys:memory_hierarchy", "relation": "prerequisite"},
+    {"source": "sys:memory_hierarchy", "target": "sys:virtual_memory", "relation": "extends"},
+    {"source": "sys:processor", "target": "sys:process", "relation": "prerequisite"},
+    {"source": "sys:process", "target": "sys:scheduling", "relation": "extends"},
+    {"source": "sys:process", "target": "sys:sync", "relation": "prerequisite"},
+    {"source": "sys:virtual_memory", "target": "sys:filesystem", "relation": "prerequisite"},
+    {"source": "sys:filesystem", "target": "sys:io", "relation": "prerequisite"},
+    {"source": "sys:isa", "target": "sys:compile_frontend", "relation": "prerequisite"},
+    {"source": "sys:compile_frontend", "target": "sys:compile_backend", "relation": "extends"},
+    {"source": "sys:compile_backend", "target": "sys:linker", "relation": "prerequisite"},
+    {"source": "sys:memory_hierarchy", "target": "sys:perf", "relation": "prerequisite"},
+    {"source": "sys:scheduling", "target": "sys:perf", "relation": "prerequisite"}
+  ],
+  "cross_domain_edges": [
+    {"source": "algo:complexity", "target": "sys:perf", "relation": "complements", "description": "算法复杂度分析是系统性能优化的理论基础"},
+    {"source": "sys:process", "target": "db:transaction", "relation": "complements", "description": "进程线程模型是理解数据库并发控制的基础"}
+  ],
+  "nodes_count": 14, "edges_count": 14, "cross_edges_count": 2
+}

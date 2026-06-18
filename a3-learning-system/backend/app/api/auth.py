@@ -5,22 +5,29 @@ from fastapi import APIRouter, Depends, HTTPException, Header, status #拿请求
 from sqlalchemy.orm import Session #数据库会话
 
 from app.core.database import get_db #获取数据库会话<--依赖注入
-from app.core.security import hash_password, verify_password, create_access_token, decode_access_token #加密+jwt方法
+from app.core.security import hash_password, verify_password, create_access_token, decode_access_token, is_token_blacklisted, add_to_blacklist #加密+jwt+黑名单方法
 from app.schemas.auth import RegisterRequest, LoginRequest, TokenResponse, UserResponse #格式
 from app.models.user import User
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 
 #依赖注入-->获取当前用户
-def get_current_user(authorization: str = Header(...), db: Session = Depends(get_db)) -> User:
+def get_current_user(authorization: str = Header(None), db: Session = Depends(get_db)) -> User:
     """从请求头提取 Bearer token → 解析 → 查数据库 → 返回 User 对象"""
+    #请求头没传,返回401
+    if not authorization:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="缺少 Authorization 请求头")
     #请求头没Bearer,直接抛出错误
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="认证格式错误")
+    token = authorization[7:]
     #取后面的令牌+令牌失效抛错误
-    payload = decode_access_token(authorization[7:])
+    payload = decode_access_token(token)
     if not payload:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="token 无效或已过期")
+    #检查 token 是否已被登出拉黑
+    if is_token_blacklisted(payload.get("jti", "")):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="token 已失效，请重新登录")
     #db里面找用户
     user = db.query(User).filter(User.id == int(payload["sub"])).first()
     if not user:
@@ -64,3 +71,22 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
 @router.get("/me", response_model=UserResponse)
 def me(current_user: User = Depends(get_current_user)):
     return current_user
+
+
+#登出接口 —— 将当前 token 的 jti 加入黑名单
+@router.post("/logout")
+def logout(
+    current_user: User = Depends(get_current_user),
+    authorization: str = Header(None),
+):
+    """登出：将当前 JWT token 的唯一标识加入 Redis 黑名单
+
+    加入黑名单后，该 token 在过期前也无法继续使用。
+    """
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization[7:]
+        payload = decode_access_token(token)
+        if payload:
+            jti = payload.get("jti", "")
+            add_to_blacklist(jti)
+    return {"status": "ok", "message": "已登出"}

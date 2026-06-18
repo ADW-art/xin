@@ -7,27 +7,68 @@ POST /api/chat/send → 接收用户消息 → 调用星火 → 逐字流式返�
 import json
 import uuid
 import logging
+import asyncio
+import re
+from concurrent.futures import ThreadPoolExecutor
+
 from fastapi import APIRouter, Depends, Header
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from langchain_core.messages import HumanMessage
 
-from app.core.database import SessionLocal
+from app.core.database import get_session
+from app.core.shared_utils import _normalize_concept_name, _build_llm_messages, _structure_knowledge_base
 from app.core.security import decode_access_token
+from app.core.sanitize import sanitize_input
 from app.models.profile import LearningProfile
 from app.models.user import User
-from app.dependencies import get_graph
+from app.models.conversation import Conversation
+from app.models.resource import Resource
+from app.models.assessment import AssessmentReport
+from app.models.learning_path import LearningPath
+from app.dependencies import get_graph, get_spark_client
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/chat", tags=["对话"])#APIrouter
+router = APIRouter(prefix="/api/chat", tags=["对话"])
+
+_SENTINEL = object()
 
 
 # ============================================================
-# 请求模型：告诉 FastAPI 前端会传什么 JSON--校验字段，解析json
+# 请求模型
 # ============================================================
+class ImageInput(BaseModel):
+    """用户上传的图片（base64 编码）"""
+    base64: str = Field(..., description="图片 base64 数据（不含 data URI 前缀）")
+    mime_type: str = Field(default="image/png", description="图片 MIME 类型")
+    name: str = Field(default="image.png", description="原始文件名")
+
 class ChatRequest(BaseModel):
     content: str = Field(..., min_length=1, description="用户输入的消息")
+    images: list[ImageInput] | None = Field(default=None, description="多模态：用户上传的图片列表（最多4张）")
+
+    @field_validator("content")
+    @classmethod
+    def content_must_be_meaningful(cls, v: str) -> str:
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("消息内容不能为空")
+        if len(stripped) > 4000:
+            raise ValueError("消息内容不能超过4000字")
+        return sanitize_input(stripped)
+
+    @field_validator("images")
+    @classmethod
+    def images_must_be_valid(cls, v: list | None) -> list | None:
+        if v is None:
+            return v
+        if len(v) > 4:
+            raise ValueError("最多支持上传4张图片")
+        for img in v:
+            if len(img.base64) > 10 * 1024 * 1024:  # 10MB base64 ≈ 7.5MB 图片
+                raise ValueError(f"图片 '{img.name}' 过大，请压缩后重试")
+        return v
 
 
 # ============================================================
@@ -40,19 +81,385 @@ def _optional_user(authorization: str | None = Header(None)):
     payload = decode_access_token(authorization[7:])
     if not payload:
         return None
-    db = SessionLocal()
+    with get_session() as db:
+        user = db.query(User).filter(User.id == int(payload["sub"])).first()
+        if user:
+            db.expunge(user)  # 分离实例，防止 session 关闭后 DetachedInstanceError
+        return user
+
+
+def _persist_agent_output(agent_name: str, content: str, user_id: int, agent_outputs: dict):
+    """将 Agent 生成的完整内容写入对应数据表 + 回写画像反馈"""
+    if not user_id or not content:
+        return
+    boosted_topic: str = ""  # 追踪 resource_agent 新增的知识点，用于 commit 后同步 BKT 先验
     try:
-        return db.query(User).filter(User.id == int(payload["sub"])).first()
-    finally:
-        db.close()
+        with get_session() as db:
+            if agent_name == "resource_agent":
+                meta = agent_outputs.get("resource_agent", {})
+                topic = meta.get("title") or meta.get("topic", "")
+                r = Resource(user_id=user_id, resource_type=meta.get("type", "document"),
+                            title=topic, content=content, generated_by="resource_agent")
+                db.add(r)
+                db.flush()
+                if meta:
+                    meta["db_id"] = r.id
+                if topic:
+                    _boost_knowledge_score(db, user_id, topic)
+                    boosted_topic = topic
+            elif agent_name == "evaluation_agent":
+                eval_meta = agent_outputs.get("evaluation_agent", {})
+                ds = eval_meta.get("dimension_scores", {})
+                if not ds:
+                    profile = _load_profile(user_id)
+                    ds = profile.get("dimension_scores") if profile else {}
+                r = AssessmentReport(user_id=user_id, report_type="progress",
+                                    report_data={"content": content},
+                                    dimension_scores=ds or {},
+                                    suggestions=[])
+                db.add(r)
+            elif agent_name == "path_agent":
+                r = LearningPath(user_id=user_id,
+                               path_data={"content": content,
+                                         "topic": agent_outputs.get("path_agent", {}).get("topic", "")},
+                               status="active")
+                db.add(r)
+            elif agent_name == "question_agent":
+                meta = agent_outputs.get("question_agent", {})
+                # 出题模式：缓存完整题目文本，供下次评阅使用
+                # (Agent 不自行调用 LLM，完整文本在此处获取后写入缓存)
+                if meta.get("mode") == "generate" and content:
+                    try:
+                        from app.agents.question_agent import cache_questions_text
+                        cache_questions_text(user_id, content)
+                    except Exception as e:
+                        logger.warning("缓存题目文本失败: %s", e)
+                # 评阅模式：解析 LLM 批改结果 → 逐题更新 BKT → 同步回 Profile
+                elif meta.get("mode") == "grade" and content:
+                    topic = meta.get("topic", "")
+                    if topic:
+                        try:
+                            from app.agents.question_agent import parse_grading_result
+                            from app.services.bkt_service import get_tracker, sync_bkt_to_profile
+
+                            result = parse_grading_result(content)
+                            per_question = result.get("per_question", [])
+                            correct_count = result.get("correct_count", 0)
+                            total_count = result.get("total_count", 0)
+
+                            if per_question and total_count > 0:
+                                tracker = get_tracker(user_id)
+                                for is_correct in per_question:
+                                    tracker.record_answer(topic, correct=is_correct)
+                                tracker.persist_to_db()
+                                logger.info(
+                                    "BKT评分闭环: topic='%s' %d/%d correct → p_known=%.3f [%s]",
+                                    topic, correct_count, total_count,
+                                    tracker.get_or_create(topic).p_known,
+                                    tracker.get_or_create(topic).level,
+                                )
+                                # 回写 Profile: BKT 后验概率 → knowledge_base 分数
+                                sync_bkt_to_profile(user_id)
+                            elif total_count > 0:
+                                # 解析出汇总但无逐题明细，用聚合准确率更新
+                                from app.services.bkt_service import get_tracker, sync_bkt_to_profile
+                                tracker = get_tracker(user_id)
+                                accuracy = correct_count / total_count
+                                tracker.record_answer(topic, correct=accuracy >= 0.6)
+                                tracker.persist_to_db()
+                                sync_bkt_to_profile(user_id)
+                        except Exception as e:
+                            logger.warning("BKT评分闭环执行失败: %s", e)
+        # commit 已完成（get_session 退出时自动 commit）
+        # 将资源生成新增的知识点同步到 BKT 作为先验
+        if boosted_topic:
+            try:
+                from app.services.bkt_service import sync_profile_to_bkt
+                kb_sync = _load_profile(user_id)
+                if kb_sync:
+                    sync_profile_to_bkt(user_id, kb_sync.get("knowledge_base", {}))
+            except Exception as _e:
+                logger.warning("Profile→BKT 资源同步失败: %s", _e)
+    except Exception as e:
+        logger.warning("持久化 %s 输出失败: %s", agent_name, e)
+
+
+# ═══════════════════════════════════════════════════════════════
+# v3: 画像事件驱动闭环 — Agent 完成后自动触发下游操作
+# ═══════════════════════════════════════════════════════════════
+
+def _post_agent_event_hook(agent_name: str, user_id: int, agent_outputs: dict):
+    """Agent 完成后的自动联动: 评估→重规划, BKT变化→重评估
+
+    参考: LangGraph HITL pattern + 教育系统 event-driven assessment
+    """
+    if not user_id:
+        return
+
+    try:
+        # ── 事件1: Question Agent 批改完成 → BKT显著变化 → 推评估 ──
+        if agent_name == "question_agent":
+            q_meta = agent_outputs.get("question_agent", {})
+            if q_meta.get("mode") == "grade":
+                p_known = q_meta.get("bkt_p_known", 0.5)
+                # BKT < 0.4: 薄弱, 建议重评估
+                if p_known < 0.4:
+                    logger.info("闭环事件: question→evaluation (p_known=%.2f < 0.4)", p_known)
+                    _store_suggestion(user_id, "evaluation", {
+                        "reason": f"BKT检测到薄弱点(p_known={p_known:.2f})，建议评估",
+                        "priority": "high",
+                    })
+
+        # ── 事件2: Evaluation Agent 完成 → 薄弱点变化 → 推路径重规划 ──
+        elif agent_name == "evaluation_agent":
+            eval_meta = agent_outputs.get("evaluation_agent", {})
+            dims = eval_meta.get("dimension_scores", {})
+            weak_dims = [k for k, v in dims.items() if isinstance(v, (int, float)) and v < 40]
+            if weak_dims:
+                logger.info("闭环事件: evaluation→path (薄弱维度: %s)", weak_dims)
+                _store_suggestion(user_id, "path", {
+                    "reason": f"评估发现薄弱维度: {', '.join(weak_dims)}，建议重新规划",
+                    "weak_dims": weak_dims,
+                    "priority": "high",
+                })
+
+        # ── 事件3: Resource Agent 教学完成 → 推练习 ──
+        elif agent_name == "resource_agent":
+            _store_suggestion(user_id, "question", {
+                "reason": "教学完成后推荐练习巩固",
+                "priority": "medium",
+            })
+
+        # ── 事件4: Profile Agent 画像采集完成 → 推测试/路径 ──
+        elif agent_name == "profile_agent":
+            p_meta = agent_outputs.get("profile_agent", {})
+            if p_meta.get("profile_data") and len(p_meta.get("profile_data", {})) >= 3:
+                _store_suggestion(user_id, "path", {
+                    "reason": "画像采集完成，推荐规划学习路径",
+                    "priority": "medium",
+                })
+
+    except Exception as e:
+        logger.warning("事件驱动钩子失败: %s", e)
+
+
+def _store_suggestion(user_id: int, intent: str, context: dict):
+    """存储 Agent 联动建议 (写入 Redis 或 Profile 的 suggestions 字段)"""
+    try:
+        from app.models.profile import LearningProfile
+        from app.core.database import SessionLocal
+        db = SessionLocal()
+        try:
+            row = db.query(LearningProfile).filter(LearningProfile.user_id == user_id).first()
+            if row:
+                suggestions = list(row.suggestions or []) if isinstance(row.suggestions, list) else []
+                # 去重: 同意图30分钟内不重复建议
+                import time
+                now = time.time()
+                recent = any(
+                    s.get("intent") == intent and now - s.get("ts", 0) < 1800
+                    for s in suggestions[-5:]  # 只检查最近5条
+                )
+                if not recent:
+                    suggestions.append({"intent": intent, "ts": now, **context})
+                    row.suggestions = suggestions[-10:]  # 保留最近10条
+                    db.commit()
+        finally:
+            db.close()
+    except Exception:
+        pass  # 建议存储失败不影响主流程
+
+
+def _extract_and_boost(user_id: int, user_message: str):
+    """从用户消息中提取知识点 → 更新 knowledge_base（不依赖 Agent 路由）
+
+    原则：
+      1. 先判断消息是否有学习意图（闲聊/问候/感谢等直接跳过）
+      2. 从知识图谱 51 个专有名词中匹配，而非用通配正则提取
+      3. 匹配到的 KG 节点名 = 标准化概念名，无需二次 normalize
+    """
+    if not user_id or not user_message:
+        return
+
+    # ═══════════════════════════════════════════════════════════
+    # Step 1: 学习意图预过滤 — 非学习意图的消息不触发知识更新
+    # ═══════════════════════════════════════════════════════════
+    LEARNING_INTENT_KEYWORDS = [
+        # 明确学习意图
+        '学', '教', '讲', '解释', '介绍', '什么是', '什么叫', '怎么做', '如何',
+        '帮我', '给我', '我要', '我想', '帮我学', '教我', '讲一下', '说说',
+        # 做题意图
+        '出题', '做题', '测试', '考', '练习', '题目', '来点', '给我出',
+        # 资源意图
+        '生成', '资料', '笔记', '导图', '代码', '案例', '资源', '文档',
+        # 评估意图
+        '评估', '掌握', '学得', '水平', '报告', '分析',
+    ]
+    has_learning_intent = any(kw in user_message for kw in LEARNING_INTENT_KEYWORDS)
+    if not has_learning_intent:
+        return  # 闲聊/问候/感谢/日常对话 — 不触发知识更新
+
+    # ═══════════════════════════════════════════════════════════
+    # Step 2: 加载知识图谱节点作为专有名词词表
+    # ═══════════════════════════════════════════════════════════
+    try:
+        from app.services.bkt_service import _load_kg_vocabulary
+        kg_nodes = _load_kg_vocabulary()
+    except Exception:
+        return
+    if not kg_nodes:
+        return
+
+    # ═══════════════════════════════════════════════════════════
+    # Step 3: 在用户消息中查找知识图谱专有名词（含子串匹配）
+    # ═══════════════════════════════════════════════════════════
+    matched_concepts = []
+    for node in kg_nodes:
+        if node in user_message:
+            matched_concepts.append(node)
+            continue
+        # 子串匹配：将节点名按中英文边界切分后匹配
+        # 例如 "Python基础" → ["Python", "基础"], "C++基础" → ["C++", "基础"]
+        node_parts = re.split(r'(?<=[a-zA-Z0-9+#])(?=[一-鿿])|(?<=[一-鿿])(?=[a-zA-Z0-9+#])|与|和|/', node)
+        node_parts = [p.strip() for p in node_parts if len(p.strip()) >= 2]
+        for part in node_parts:
+            if part in user_message:
+                matched_concepts.append(node)
+                break
+        else:
+            # 纯中文节点（如 "排序算法"），取其前2字做前缀匹配
+            # 用户说 "来点排序题目" 可以匹配到 "排序算法"
+            if len(node) >= 3 and all('一' <= c <= '鿿' or c in '·' for c in node[:2]):
+                prefix = node[:2]
+                if prefix in user_message and prefix not in ('什么', '怎么', '如何', '为什么', '哪个'):
+                    matched_concepts.append(node)
+
+    if not matched_concepts:
+        # 没有匹配到 KG 专有名词 → 不更新（避免把"列表"之外的无关词条入库）
+        return
+
+    # ═══════════════════════════════════════════════════════════
+    # Step 4: 更新 Profile + 同步到 BKT
+    # ═══════════════════════════════════════════════════════════
+    for topic in matched_concepts:
+        try:
+            with get_session() as db:
+                _boost_knowledge_score(db, user_id, topic)
+                logger.info("学习闭环: KG节点 '%s' → Profile 已更新", topic)
+        except Exception as e:
+            logger.warning("学习闭环失败 (topic=%s): %s", topic, e)
+
+    # 批量同步 BKT
+    try:
+        from app.services.bkt_service import sync_profile_to_bkt
+        kb_sync = _load_profile(user_id)
+        if kb_sync:
+            sync_profile_to_bkt(user_id, kb_sync.get("knowledge_base", {}))
+    except Exception as _e:
+        logger.warning("Profile→BKT 同步失败: %s", _e)
+
+
+def _silent_profile_collect(user_id: int, user_message: str):
+    """静默画像采集：从非 profile 交互中提取背景信息
+
+    限制：仅对含学习相关关键词的消息触发，闲聊/问候等无关语句跳过。
+    """
+    if not user_id or not user_message:
+        return
+
+    # 学习意图预过滤 — 同 _extract_and_boost 的过滤逻辑
+    LEARNING_KEYWORDS = [
+        '学', '教', '讲', '解释', '介绍', '什么是', '怎么做', '如何',
+        '帮我', '给我', '我要', '我想', '做题', '考试', '面试',
+        '学过', '用过', '会', '懂', '熟悉', '了解', '做过',
+        '喜欢', '偏好', '倾向于', '目标', '希望', '打算',
+    ]
+    if not any(kw in user_message for kw in LEARNING_KEYWORDS):
+        return  # 闲聊/问候/日常对话 — 不触发画像采集
+    text = user_message.strip()
+    kb_patterns = [
+        r'(?:我)?(?:已经?|以前|之前|学过|用过|会|懂|熟悉|了解|做过)[的\s]*([\w一-鿿]{2,15})',
+        r'(?:我是|作为)([一二三四五六七八九十\d]+年?[的\s]*[\w一-鿿]{2,10})',
+    ]
+    goal_patterns = [
+        r'(?:为了|准备|想找|目标是|希望|打算)([\w一-鿿]{2,12})',
+        r'(?:求职|找工作|面试|考试|考研|转行|升职|加薪)',
+    ]
+    style_patterns = [
+        r'(?:喜欢|偏好|更愿|倾向于|习惯)(?:看|读|听|写|做|动手)([\w一-鿿]{2,8})',
+    ]
+    updates = {}
+    for pattern in kb_patterns:
+        m = re.search(pattern, text)
+        if m:
+            val = m.group(1).strip() if len(m.groups()) > 0 else m.group(0)
+            if len(val) >= 2:
+                updates["knowledge_base"] = val
+                break
+    for pattern in goal_patterns:
+        m = re.search(pattern, text)
+        if m:
+            val = m.group(1).strip() if len(m.groups()) > 0 else m.group(0)
+            if len(val) >= 2:
+                updates["learning_goal"] = val
+            else:
+                updates["learning_goal"] = m.group(0)
+            break
+    for pattern in style_patterns:
+        m = re.search(pattern, text)
+        if m:
+            val = m.group(1).strip() if len(m.groups()) > 0 else ""
+            if val:
+                updates["cognitive_style"] = val
+            break
+    if not updates:
+        return
+    try:
+        with get_session() as db:
+            row = db.query(LearningProfile).filter(LearningProfile.user_id == user_id).first()
+            if row:
+                for key, value in updates.items():
+                    old_val = getattr(row, key, None)
+                    if not old_val or (isinstance(old_val, str) and len(old_val) < 3):
+                        setattr(row, key, value)
+                        logger.info("静默采集: %s = '%s' (user_id=%d)", key, value, user_id)
+    except Exception as e:
+        logger.warning("静默采集失败: %s", e)
+
+
+def _boost_knowledge_score(db, user_id: int, topic: str, boost: float = 8.0):
+    """资源生成/学习行为后，更新用户画像 knowledge_base + 同步 BKT 追踪器"""
+    topic = _normalize_concept_name(topic)
+    if topic == "未分类":
+        return
+    row = db.query(LearningProfile).filter(LearningProfile.user_id == user_id).first()
+    if not row:
+        return
+    kb = row.knowledge_base
+    if not kb or isinstance(kb, str):
+        kb = _structure_knowledge_base(str(kb or "")) if isinstance(kb, str) else {}
+    matched_key = None
+    for existing_key in kb:
+        if topic.lower() in existing_key.lower() or existing_key.lower() in topic.lower():
+            matched_key = existing_key
+            break
+    if matched_key:
+        old_val = float(kb[matched_key]) if isinstance(kb[matched_key], (int, float)) else 55.0
+        kb[matched_key] = round(min(95, old_val + boost), 1)
+        logger.info("FeedbackLoop: 提升知识点 '%s' %.1f -> %.1f", matched_key, old_val, kb[matched_key])
+    else:
+        kb[topic] = 40.0
+        logger.info("FeedbackLoop: 新增知识点 '%s' -> 40.0", topic)
+    row.knowledge_base = kb
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(row, "knowledge_base")
 
 
 def _load_profile(user_id: int) -> dict | None:
     """从 MySQL 加载用户画像"""
     if not user_id:
         return None
-    db = SessionLocal()
-    try:
+    with get_session() as db:
         row = db.query(LearningProfile).filter(LearningProfile.user_id == user_id).first()
         if not row:
             return None
@@ -65,8 +472,180 @@ def _load_profile(user_id: int) -> dict | None:
             "preferred_resource_type": row.preferred_resource_type,
             "dimension_scores": row.dimension_scores,
         }
-    finally:
-        db.close()
+
+
+def _load_conversation_history(user_id: int, limit: int = 12) -> list:
+    """加载最近的对话历史，构建 LangChain messages 列表"""
+    if not user_id:
+        return []
+    with get_session() as db:
+        rows = (
+            db.query(Conversation)
+            .filter(Conversation.user_id == user_id)
+            .order_by(Conversation.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+        rows.reverse()
+        from langchain_core.messages import HumanMessage, AIMessage
+        messages = []
+        for row in rows:
+            if row.role == "user":
+                messages.append(HumanMessage(content=row.content))
+            else:
+                messages.append(AIMessage(content=row.content))
+        return messages
+
+
+def _extract_topic_context(history_msgs: list, current_msg: str) -> dict:
+    """从对话历史中提取当前话题上下文"""
+    result = {
+        "current_topic": "",
+        "recent_topics": [],
+        "pronoun_map": {},
+        "domain": "",
+        "user_language": "",
+        "user_constraints": [],
+    }
+    if not history_msgs:
+        return result
+    all_text = current_msg + " "
+    for msg in history_msgs[-8:]:
+        content = str(getattr(msg, 'content', msg))
+        all_text += content + " "
+    language_patterns = [
+        r'(?:我要学|想学|学|用|写|教我|帮我|给我)[\s]*([Cc][+\#]*|[Gg]o|[Rr]ust|[Jj]ava[Ss]cript|[Pp]ython|[Jj]ava|[Ss]wift|[Kk]otlin|[Rr]uby|[Pp]hp|[Tt]ype[Ss]cript)',
+        r'(?:用|使用|基于|基于?)[\s]*([Cc][+\#]+|[Gg]o|[Rr]ust|[Jj]ava[Ss]cript|[Pp]ython|[Jj]ava)',
+        r'([Cc]\+\+|[Cc]#|[Gg]o|[Rr]ust|[Pp]ython|[Jj]ava|[Jj]ava[Ss]cript|[Ss]wift|[Kk]otlin)(?:语言|开发|编程)?',
+    ]
+    for pattern in language_patterns:
+        m = re.search(pattern, all_text)
+        if m and m.lastindex and m.lastindex >= 1:
+            lang = m.group(1).strip()
+            if lang and len(lang) >= 2:
+                result["user_language"] = lang
+                break
+    exclude_patterns = [
+        r'(?:不要|别|不用|不要给我|不想|排除|跳过)[\s]*(.{2,10}?)(?:[，。！？\s]|$)',
+    ]
+    for pattern in exclude_patterns:
+        matches = re.findall(pattern, all_text)
+        for m2 in matches:
+            m2 = m2.strip()
+            if len(m2) >= 2:
+                result["user_constraints"].append(m2)
+    domain_keywords = {
+        "C++基础": ["c++", "cpp", "指针", "引用", "内存管理", "模板", "STL", "面向对象", "虚函数", "多态", "继承"],
+        "Python基础": ["python", "列表", "字典", "元组", "函数", "类", "装饰器", "推导式", "迭代器", "生成器"],
+        "Java基础": ["java", "spring", "maven", "jvm", "集合", "stream", "注解", "接口", "抽象类"],
+        "Go语言": ["go", "goroutine", "channel", "协程", "并发", "interface", "struct", "slice", "map"],
+        "JavaScript": ["javascript", "js", "node", "react", "vue", "angular", "promise", "async", "dom"],
+        "数据结构": ["树", "图", "链表", "栈", "队列", "哈希", "排序", "查找", "二叉树", "红黑树", "B树", "数组"],
+        "算法": ["递归", "动态规划", "贪心", "分治", "回溯", "DFS", "BFS", "二分", "快排", "归并"],
+        "数据库": ["SQL", "MySQL", "索引", "事务", "JOIN", "查询优化", "NoSQL", "Redis", "PostgreSQL"],
+        "前端开发": ["HTML", "CSS", "JavaScript", "React", "Vue", "DOM", "组件", "响应式", "CSS3"],
+        "后端开发": ["API", "REST", "Flask", "Django", "Spring", "微服务", "接口", "认证", "中间件"],
+        "机器学习": ["神经网络", "深度学习", "训练", "模型", "特征", "分类", "回归", "聚类", "TensorFlow", "PyTorch"],
+    }
+    domain_scores = {}
+    for domain, keywords in domain_keywords.items():
+        score = sum(1 for kw in keywords if kw.lower() in all_text.lower())
+        if score >= 1:
+            domain_scores[domain] = score
+    if result["user_language"]:
+        lang_lower = result["user_language"].lower()
+        for domain in domain_keywords:
+            if lang_lower in domain.lower() or any(kw.lower() == lang_lower for kw in domain_keywords[domain]):
+                result["domain"] = domain
+                break
+        if not result["domain"] and domain_scores:
+            result["domain"] = max(domain_scores, key=domain_scores.get)
+    elif domain_scores:
+        result["domain"] = max(domain_scores, key=domain_scores.get)
+    topic_patterns = [
+        r'(?:[Cc]\+\+|[Pp]ython|[Jj]ava|[Gg]o|[Jj]avascript)[\s]*(?:的)?[\s]*(?:列表|字典|数组|字符串|函数|类|指针|引用|容器|模板|迭代器|STL|集合|对象|变量|循环|条件|异常|内存|线程|并发|协程)',
+        r'(?:二叉|平衡|红黑|B[\s]*树|AVL|堆|线段| Trie |前缀)*树',
+        r'(?:快速|归并|冒泡|插入|选择|桶|基数|希尔|计数)*排序',
+        r'(链表|栈|队列|哈希表|散列表|堆栈|数组|矩阵|图|有向图|无向图)',
+        r'(递归|迭代|遍历|搜索|查找|回溯|贪心|分治|动态规划|DFS|BFS|二分|双指针|滑动窗口)',
+        r'(指针|引用|虚函数|纯虚函数|模板|特化|偏特化|STL|vector|map|set|智能指针|unique_ptr|shared_ptr|移动语义|右值引用)',
+        r'(装饰器|推导式|生成器|迭代器|闭包|lambda|切片|解包|上下文管理符|元类|描述符|@property)',
+        r'(封装|继承|多态|重载|覆盖|抽象|接口|泛型|类型推断|内存管理|垃圾回收|并发|并行|异步|回调|Promise)',
+    ]
+    topics_found = []
+    for pattern in topic_patterns:
+        matches = re.findall(pattern, all_text, re.IGNORECASE)
+        for m3 in matches:
+            if isinstance(m3, tuple):
+                m3 = m3[0]
+            m3 = m3.strip()
+            if len(m3) >= 2 and len(m3) <= 20 and m3 not in topics_found:
+                topics_found.append(m3)
+    if result["user_language"] and result["user_language"] not in topics_found:
+        topics_found.append(result["user_language"])
+    if topics_found:
+        result["current_topic"] = topics_found[-1]
+        result["recent_topics"] = topics_found[-5:]
+    pronouns = ["它", "这个", "这个概念", "那个", "那", "这种"]
+    if result["current_topic"]:
+        for pronoun in pronouns:
+            if pronoun in current_msg:
+                result["pronoun_map"][pronoun] = result["current_topic"]
+                break
+    return result
+
+
+async def _bridge_stream(spark, messages: list, temperature: float, max_tokens: int, use_safe: bool = False, chunk_size: int = 2):
+    """线程安全队列桥接：把同步的 chat_stream 转成异步生成器"""
+    queue: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_event_loop()
+
+    def _run():
+        try:
+            pre_collected = messages[0].get("__pre_collected__") if messages and isinstance(messages[0], dict) else None
+            if pre_collected:
+                for chunk in pre_collected:
+                    if chunk:
+                        loop.call_soon_threadsafe(queue.put_nowait, chunk)
+            elif use_safe:
+                from app.utils.llm_helper import safe_chat_stream
+                gen = safe_chat_stream(spark, messages, temperature=temperature, max_tokens=max_tokens, retries=2, fallback="服务繁忙，请稍后再试~")
+                for chunk in gen:
+                    if chunk:
+                        loop.call_soon_threadsafe(queue.put_nowait, chunk)
+            else:
+                gen = spark.chat_stream(messages, temperature=temperature, max_tokens=max_tokens)
+                for chunk in gen:
+                    if chunk:
+                        loop.call_soon_threadsafe(queue.put_nowait, chunk)
+        except Exception as exc:
+            loop.call_soon_threadsafe(queue.put_nowait, exc)
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
+
+    ThreadPoolExecutor(max_workers=1).submit(_run)
+
+    # True streaming: yield chunks as they arrive (NOT buffered)
+    # chunk_size > 0 enables character-level typewriter effect
+    accumulated = ""
+    while True:
+        item = await queue.get()
+        if item is _SENTINEL:
+            if accumulated:
+                yield accumulated
+            break
+        if isinstance(item, Exception):
+            if accumulated:
+                yield accumulated
+            raise item
+
+        if chunk_size > 0:
+            accumulated += item
+            while len(accumulated) >= chunk_size:
+                yield accumulated[:chunk_size]
+                accumulated = accumulated[chunk_size:]
+        else:
+            yield item
 
 
 # ============================================================
@@ -76,57 +655,176 @@ def _load_profile(user_id: int) -> dict | None:
 async def chat_send(
     request: ChatRequest,
     graph=Depends(get_graph),
+    spark=Depends(get_spark_client),
     current_user: User | None = Depends(_optional_user),
 ):
-    """发送消息 → LangGraph Supervisor 调度 → Agent 处理 → SSE 流式返回"""
+    """发送消息 -> LangGraph Supervisor 调度 -> Agent 处理 -> SSE 流式返回"""
 
     user_id = current_user.id if current_user else 0
 
+    history_msgs = _load_conversation_history(user_id, limit=12)
+    topic_ctx = _extract_topic_context(history_msgs, request.content)
+
+    # ── 多模态：构建用户消息（支持纯文本 / 文本+图片）──
+    if request.images:
+        # OpenAI Vision API 格式的多模态 content
+        multimodal_content: list[dict] = [
+            {"type": "text", "text": request.content}
+        ]
+        for img in request.images:
+            data_url = f"data:{img.mime_type};base64,{img.base64}"
+            multimodal_content.append({
+                "type": "image_url",
+                "image_url": {"url": data_url},
+            })
+        user_msg = HumanMessage(content=multimodal_content)
+    else:
+        user_msg = HumanMessage(content=request.content)
+
+    config = {"configurable": {"thread_id": f"user-{user_id}"}, "recursion_limit": 50}
+
+    # 从 checkpoint 恢复 teaching_context（跨轮次持久化）
+    prev_teaching_ctx = None
+    try:
+        snapshot = await asyncio.to_thread(graph.get_state, config)
+        if snapshot and snapshot.values:
+            prev_teaching_ctx = snapshot.values.get("teaching_context")
+            if prev_teaching_ctx and prev_teaching_ctx.get("mode") == "teaching":
+                logger.info("SSE: 恢复教学流程 state (current=%d/%d)",
+                            prev_teaching_ctx.get("current_index", 0) + 1,
+                            len(prev_teaching_ctx.get("active_path", [])))
+    except Exception as _e:
+        logger.debug("SSE: 获取 checkpoint 教学状态失败（新用户正常）: %s", _e)
+
     initial_state = {
-        "messages": [HumanMessage(content=request.content)],
+        "messages": history_msgs + [user_msg],
         "current_agent": "supervisor",
         "next_agent": None,
         "user_profile": _load_profile(user_id),
-        "context": {},
+        "context": {"topic_context": topic_ctx},
         "agent_outputs": {},
         "stream_buffer": "",
         "user_id": user_id,
+        "teaching_context": prev_teaching_ctx,
     }
 
-    config = {"configurable": {"thread_id": str(uuid.uuid4())}} #thread_id 用于区分多轮对话
-    #异步生成器--sse流式输出
+    if user_id:
+        with get_session() as db:
+            db.add(Conversation(user_id=user_id, role="user", content=request.content))
+
     async def event_stream():
         prev_agent = "supervisor"
+        assistant_content = ""
+        assistant_agent = ""
+        _captured_outputs = {}
+        _agent_switch_count = 0
+
         try:
-            #astream--langgraph异步流式执行方法
-            #从入口开始执行，执行完一个节点就输出一下
             async for update in graph.astream(initial_state, config, stream_mode="updates"):
-                #图有可能并行，一轮多个节点
                 for node_name, node_update in update.items():
-                    # 当前被调度的节点名--过滤掉不需要的节点
-                    if node_name not in ("supervisor", "__end__"): #不是总调度/end时继续
-                        agent_name = node_name
+                    if node_name == "__end__":
+                        continue
+                    agent_name = node_name
 
-                        # Agent 切换通知-与之前不同时--提示
-                        if agent_name != prev_agent:
-                            yield f"event: agent_switch\ndata: {json.dumps({'from': prev_agent, 'to': agent_name}, ensure_ascii=False)}\n\n"
-                            prev_agent = agent_name
+                    if agent_name != prev_agent:
+                        _agent_switch_count += 1
+                        yield f"event: agent_switch\ndata: {json.dumps({'from': prev_agent, 'to': agent_name}, ensure_ascii=False)}\n\n"
+                        prev_agent = agent_name
+                        assistant_agent = agent_name
 
-                        # 流式缓冲区内容--有内容就往前推
-                        buf = node_update.get("stream_buffer", "")
-                        if buf:
+                    agent_output = node_update.get("agent_outputs", {})
+                    if agent_output:
+                        _captured_outputs.update(agent_output)
+
+                    _resource_meta = agent_output.get(agent_name, {})
+                    if _resource_meta and "type" in _resource_meta and agent_name == "resource_agent":
+                        _res_payload = json.dumps({
+                            "type": "resource",
+                            "resource_type": _resource_meta.get("type", "document"),
+                            "title": _resource_meta.get("title") or _resource_meta.get("topic", "学习资源"),
+                        }, ensure_ascii=False)
+                        yield f"event: resource\ndata: {_res_payload}\n\n"
+
+                    pending = agent_output.get(agent_name, {}).get("stream_pending")
+                    if pending:
+                        try:
+                            from app.utils.content_guard import StreamGuard
+                            guard = StreamGuard()
+                            chunk_count = 0
+                            estimated_total = max(1, pending.get("max_tokens", 2048) // 3)
+                            yield f"event: progress\ndata: {json.dumps({'stage': 'generating', 'agent': agent_name, 'progress': 0, 'message': '正在生成...'}, ensure_ascii=False)}\n\n"
+                            async for chunk in _bridge_stream(
+                                spark,
+                                pending["messages"],
+                                pending.get("temperature", 0.7),
+                                pending.get("max_tokens", 2048),
+                                use_safe=pending.get("use_safe", False),
+                                chunk_size=pending.get("chunk_size", 2),
+                            ):
+                                if chunk:
+                                    safe_chunk = guard.feed(chunk)
+                                    if safe_chunk is not None:
+                                        assistant_content += safe_chunk
+                                        chunk_count += 1
+                                        yield f"event: message\ndata: {json.dumps({'content': safe_chunk, 'agent': agent_name}, ensure_ascii=False)}\n\n"
+                                        if chunk_count % 50 == 0:
+                                            pct = min(90, int(chunk_count / estimated_total * 100))
+                                            yield f"event: progress\ndata: {json.dumps({'stage': 'generating', 'agent': agent_name, 'progress': pct}, ensure_ascii=False)}\n\n"
+                            if guard.blocked:
+                                logger.warning("SSE: %s 输出被内容安全守卫拦截", agent_name)
+                                safe_fallback = guard.get_safe_content()
+                                assistant_content = safe_fallback
+                                yield f"event: message\ndata: {json.dumps({'content': safe_fallback, 'agent': agent_name}, ensure_ascii=False)}\n\n"
+                            yield f"event: progress\ndata: {json.dumps({'stage': 'complete', 'agent': agent_name, 'progress': 100}, ensure_ascii=False)}\n\n"
+                        except Exception as stream_err:
+                            logger.warning("SSE: %s 流式输出异常: %s", agent_name, stream_err)
+                            error_msg = f"\n（{agent_name} 输出中断，请稍后重试）"
+                            assistant_content += error_msg
+                            yield f"event: message\ndata: {json.dumps({'content': error_msg, 'agent': agent_name}, ensure_ascii=False)}\n\n"
+                        continue
+
+                    buf = node_update.get("stream_buffer", "")
+                    if buf:
+                        from app.utils.content_guard import get_guard
+                        guard = get_guard()
+                        safe, warning = guard.check(buf)
+                        if safe:
+                            assistant_content += buf
                             yield f"event: message\ndata: {json.dumps({'content': buf, 'agent': agent_name}, ensure_ascii=False)}\n\n"
+                        else:
+                            safe_msg = guard.get_safe_content() if hasattr(guard, 'get_safe_content') else "抱歉，生成的内容未通过安全检查。请换一种方式提问。"
+                            assistant_content += safe_msg
+                            yield f"event: message\ndata: {json.dumps({'content': safe_msg, 'agent': agent_name}, ensure_ascii=False)}\n\n"
 
-            yield f"event: done\ndata: {json.dumps({'status': 'complete'})}\n\n"
+            yield f"event: done\ndata: {json.dumps({'status': 'complete', 'agent_switches': _agent_switch_count})}\n\n"
+
+            if user_id and assistant_content:
+                with get_session() as db2:
+                    db2.add(Conversation(user_id=user_id, role="assistant", content=assistant_content, agent_type=assistant_agent))
+                _persist_agent_output(assistant_agent, assistant_content, user_id, _captured_outputs)
+                # v3: 事件驱动闭环 — Agent完成后自动触发下游
+                _post_agent_event_hook(assistant_agent, user_id, _captured_outputs)
+                _extract_and_boost(user_id, request.content)
+                _silent_profile_collect(user_id, request.content)
 
         except Exception as e:
-            yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
+            logger.error("SSE: event_stream 异常: %s", e)
+            err_type = type(e).__name__
+            err_msg = str(e)
+            if "timeout" in err_msg.lower() or "超时" in err_msg:
+                user_friendly = "请求超时了~ 处理时间较长，请稍后再试。"
+            elif "token" in err_msg.lower() or "limit" in err_msg.lower():
+                user_friendly = "内容过长啦~ 能不能简化一下问题？"
+            else:
+                user_friendly = "处理过程中遇到了一点问题，请稍后重试。"
+            yield f"event: error\ndata: {json.dumps({'message': user_friendly, 'detail': err_msg[:200]}, ensure_ascii=False)}\n\n"
 
-    return StreamingResponse( #流式响应类-接收一个异步函数作为参数
-        event_stream(),#返回内容
-        media_type="text/event-stream",#MIME类型
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",#不让浏览器缓存
-            "X-Accel-Buffering": "no",#不让nginx缓存-防止破坏流式效果
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
         },
     )
