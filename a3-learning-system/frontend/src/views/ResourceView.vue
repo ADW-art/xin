@@ -7,7 +7,9 @@
 
     <!-- Search bar -->
     <div class="resource-search">
-      <el-input v-model="searchQuery" placeholder="搜索资源标题或内容..." clearable :prefix-icon="Search" size="large" @input="onSearchInput" />
+      <el-input v-model="searchQuery" placeholder="搜索资源标题或内容..." clearable size="large" @input="onSearchInput">
+        <template #prefix><el-icon><Search /></el-icon></template>
+      </el-input>
     </div>
 
     <!-- Loading skeleton -->
@@ -95,7 +97,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowRight, WarningFilled, Delete } from '@element-plus/icons-vue'
+import { ArrowRight, WarningFilled, Delete, Search } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { deleteResource, type ResourceItem } from '@/api/resource'
 import api from '@/api/index'

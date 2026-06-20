@@ -264,7 +264,7 @@ const radarRef = ref<HTMLElement | null>(null)
 const dashboardError = ref('')
 
 // ═══════════ Types ═══════════
-interface Profile { cognitive_style?: string; learning_goal?: string; weekly_hours?: number; knowledge_base?: Record<string,number>; dimension_scores?: Record<string,number> }
+interface Profile { cognitive_style?: string; learning_goal?: string; weekly_hours?: number; knowledge_base?: Record<string,number>; dimension_scores?: Record<string,number>; suggestions?: Array<{intent:string; reason:string; ts?:number}> }
 interface ResourceItem { id: number; resource_type: string; title: string; created_at: string }
 interface MasteryItem { name: string; val: number; label: string; color: string; barColor: string }
 interface RiskItem { name: string; desc: string; level: string }

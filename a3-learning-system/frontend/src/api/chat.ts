@@ -31,6 +31,9 @@ export interface SSEChunk {
   // 进度事件字段（type=progress 时）
   stage?: string       // "generating" | "complete"
   progress?: number    // 0-100 进度百分比
+  // 智能建议字段（type=suggestion 时）
+  intent?: string      // evaluation / resource / question / path
+  reason?: string      // 建议原因描述
 }
 
 /*
