@@ -15,7 +15,7 @@
     </div>
 
     <!-- Tab: System Graph -->
-    <div v-if="graphMode === 'system'">
+    <div v-show="graphMode === 'system'">
       <span v-if="domainName" class="kg-domain-badge">{{ domainName }}</span>
       <span v-if="previewMode" class="kg-preview-badge">预览模式 — 对话后自动匹配领域</span>
       <div class="kg-top-r">
@@ -190,7 +190,7 @@
     </div>
 
     <!-- Tab: Custom Graph -->
-    <div v-else class="custom-graph-section">
+    <div v-show="graphMode === 'custom'" class="custom-graph-section">
         <div class="custom-graph-toolbar">
           <el-input v-model="newGraphName" placeholder="输入新图谱名称..." size="small" style="width:200px" />
           <el-button type="primary" size="small" @click="createGraph" :disabled="!newGraphName.trim()">创建图谱</el-button>
