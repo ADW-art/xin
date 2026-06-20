@@ -130,7 +130,7 @@
         </div>
         <div class="panel-bd">
           <div v-for="(sg, i) in suggestions.slice(0, 3)" :key="i" class="sg-item" @click="handleSuggestion(sg)">
-            <span class="sg-icon">{{ sgIcon(sg.intent) }}</span>
+            <el-icon :size="18" class="sg-icon"><component :is="sgIcon(sg.intent)" /></el-icon>
             <div class="sg-info">
               <span class="sg-reason">{{ sg.reason }}</span>
               <span class="sg-action">{{ sgLabel(sg.intent) }}</span>
@@ -328,9 +328,9 @@ function loadSuggestions() {
 }
 
 const SUGGESTION_ICONS: Record<string, string> = {
-  evaluation: '📊', resource: '📚', question: '✏️', path: '🗺️', profile: '👤'
+  evaluation: 'TrendCharts', resource: 'Reading', question: 'EditPen', path: 'Guide', profile: 'User'
 }
-function sgIcon(intent: string) { return SUGGESTION_ICONS[intent] || '💡' }
+function sgIcon(intent: string) { return SUGGESTION_ICONS[intent] || 'Connection' }
 
 const SUGGESTION_ACTIONS: Record<string, string> = {
   evaluation: '去做评估 →', resource: '去学习 →', question: '去练习 →',
