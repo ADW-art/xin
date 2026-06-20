@@ -5,6 +5,11 @@
       <p>AI 为你生成的个性化学习资源</p>
     </div>
 
+    <!-- Search bar -->
+    <div class="resource-search">
+      <el-input v-model="searchQuery" placeholder="搜索资源标题或内容..." clearable :prefix-icon="Search" size="large" @input="onSearchInput" />
+    </div>
+
     <!-- Loading skeleton -->
     <div v-if="loading" class="loading-state">
       <div v-for="i in 4" :key="i" class="skel-card">
@@ -75,7 +80,10 @@
           <div class="r-meta">{{ r.knowledge_points?.join(' · ') || '暂无关联知识点' }}</div>
         </div>
 
-        <!-- 箭头 -->
+        <!-- 删除 + 箭头 -->
+        <button class="r-del" title="删除资源" @click.stop="onDelete(r)">
+          <el-icon><Delete /></el-icon>
+        </button>
         <div class="r-arrow">
           <el-icon><ArrowRight /></el-icon>
         </div>
@@ -87,8 +95,9 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowRight, WarningFilled } from '@element-plus/icons-vue'
-import type { ResourceItem } from '@/api/resource'
+import { ArrowRight, WarningFilled, Delete } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { deleteResource, type ResourceItem } from '@/api/resource'
 import api from '@/api/index'
 
 interface ResourceDisplayItem extends ResourceItem { color: string }
@@ -96,6 +105,13 @@ interface ResourceDisplayItem extends ResourceItem { color: string }
 const loading = ref(true)
 const loadError = ref('')
 const items = ref<ResourceDisplayItem[]>([])
+const searchQuery = ref('')
+let _searchTimer: ReturnType<typeof setTimeout> | null = null
+
+function onSearchInput() {
+  if (_searchTimer) clearTimeout(_searchTimer)
+  _searchTimer = setTimeout(() => loadResources(), 300)
+}
 // 蓝白主色调 + 协调的辅助色
 const colors = ['#2563EB', '#3B82F6', '#60A5FA', '#1D4ED8', '#0EA5E9', '#6366F1']
 const router = useRouter()
@@ -138,7 +154,9 @@ async function loadResources() {
   loading.value = true
   loadError.value = ''
   try {
-    const res = await api.get('/resources?size=50')
+    const params: Record<string, any> = { size: 50 }
+    if (searchQuery.value) params.keyword = searchQuery.value
+    const res = await api.get('/resources', { params })
     items.value = (res.data || []).map((r: ResourceItem, i: number) => ({
       ...r,
       color: colors[i % 6],
@@ -152,6 +170,26 @@ async function loadResources() {
 }
 
 onMounted(loadResources)
+
+// 删除资源（真实调用 DELETE /api/resources/{id}）
+async function onDelete(r: ResourceDisplayItem) {
+  try {
+    await ElMessageBox.confirm(`确定删除「${r.title}」吗？`, '删除资源', {
+      type: 'warning',
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+    })
+  } catch {
+    return // 用户取消
+  }
+  try {
+    await deleteResource(r.id)
+    items.value = items.value.filter((x) => x.id !== r.id)
+    ElMessage.success('已删除')
+  } catch {
+    ElMessage.error('删除失败')
+  }
+}
 </script>
 
 <style scoped>
@@ -384,6 +422,25 @@ onMounted(loadResources)
   opacity: 0;
   transform: translateX(-4px);
 }
+
+/* ── 删除按钮（hover 显示） ── */
+.r-del {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.2s ease;
+}
+.r-card:hover .r-del { opacity: 1; }
+.r-del:hover { color: #EF4444; border-color: #EF4444; background: rgba(239,68,68,.06); }
 
 .r-card:hover .r-arrow {
   opacity: 1;

@@ -156,6 +156,21 @@
             </div>
           </div>
         </div>
+
+        <!-- Review reminders -->
+        <div v-if="reviewItems.length > 0" class="kg-panel review-panel">
+          <div class="kg-panel-hd">📅 复习提醒 (艾宾浩斯)</div>
+          <div class="kg-panel-bd">
+            <div v-for="(r, ri) in reviewItems.slice(0, 5)" :key="ri" class="review-row">
+              <span class="review-concept">{{ r.concept }}</span>
+              <div class="review-bar-wrap">
+                <div class="review-bar" :style="{ width: r.retention * 100 + '%', background: r.retention < 0.3 ? '#EF4444' : r.retention < 0.6 ? '#F59E0B' : '#10B981' }" />
+              </div>
+              <span class="review-pct">{{ Math.round(r.retention * 100) }}%</span>
+              <span class="review-date">{{ r.next_review_at || '待定' }}</span>
+            </div>
+          </div>
+        </div>
       </aside>
     </div>
   </div>
@@ -222,6 +237,24 @@ const masteredCount = computed(() => nodes.value.filter(n => n.status === 'maste
 const learningCount = computed(() => nodes.value.filter(n => n.status === 'learning' || n.status === 'familiar').length)
 const pendingCount = computed(() => nodes.value.filter(n => n.status === 'beginner' || n.status === 'unknown').length)
 const totalHours = computed(() => phases.value.reduce((s, p) => s + p.estimatedHours, 0))
+
+// Review reminders from BKT/review_scheduler data
+const reviewItems = ref<Array<{concept: string; retention: number; next_review_at?: string}>>([])
+async function loadReviewData() {
+  try {
+    const bktRes = await api.get('/bkt/status')
+    const concepts = bktRes.data?.concepts || []
+    reviewItems.value = concepts
+      .filter((c: any) => c.next_review_at || (c.p_known && c.p_known < 0.7))
+      .map((c: any) => ({
+        concept: c.name || c.concept || '?',
+        retention: c.p_known || 0.3,
+        next_review_at: c.next_review_at || undefined,
+      }))
+      .sort((a: any, b: any) => a.retention - b.retention)
+  } catch { /* non-critical */ }
+}
+onMounted(() => { loadData(); loadReviewData() })
 
 // ═══════════ Helpers ═══════════
 function statusLabel(s: string) {

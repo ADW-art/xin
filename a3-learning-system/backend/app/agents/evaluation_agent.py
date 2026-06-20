@@ -211,6 +211,25 @@ def evaluation_agent_node(state: AgentState, spark: SparkClient) -> dict:
     if profile_guide:
         eval_system += profile_guide
 
+    # Mermaid 图表：从 BKT 数据构建知识点掌握分布饼图（后端生成，不依赖 LLM）
+    bkt_nodes = tracker.to_dict().get("nodes", {})
+    if bkt_nodes:
+        mastered = sum(1 for n in bkt_nodes.values() if isinstance(n, dict) and n.get("p_known", 0) >= 0.7)
+        learning = sum(1 for n in bkt_nodes.values() if isinstance(n, dict) and 0.35 <= n.get("p_known", 0) < 0.7)
+        beginner = sum(1 for n in bkt_nodes.values() if isinstance(n, dict) and n.get("p_known", 0) < 0.35)
+        total_bkt = mastered + learning + beginner
+        if total_bkt > 0:
+            mermaid_pie = (
+                f"\n\n## 知识点掌握分布（自动生成）\n\n"
+                f"```mermaid\n"
+                f"pie title 知识点掌握分布 (共{total_bkt}个)\n"
+                f'    "已掌握(≥70%)" : {mastered}\n'
+                f'    "学习中(35-70%)" : {learning}\n'
+                f'    "入门(<35%)" : {beginner}\n'
+                f"```\n"
+            )
+            eval_system += mermaid_pie
+
     # 携带对话历史上下文，确保评估报告聚焦用户当前的学科领域和编程语言
     from app.core.shared_utils import _build_llm_messages
     all_msgs = state.get("messages", [])
