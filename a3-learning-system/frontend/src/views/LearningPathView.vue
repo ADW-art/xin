@@ -15,42 +15,26 @@
     </div>
 
     <!-- Tab: System Graph -->
-    <div v-show="graphMode === 'system'">
-      <span v-if="domainName" class="kg-domain-badge">{{ domainName }}</span>
-      <span v-if="previewMode" class="kg-preview-badge">预览模式 — 对话后自动匹配领域</span>
-      <div class="kg-top-r">
-        <!-- 领域选择器（参考美团：用户可切换不同领域图谱） -->
-        <el-select
-          v-model="currentDomain"
-          placeholder="切换学习领域"
-          size="small"
-          style="width: 180px; margin-right: 8px;"
-          @change="switchDomain"
-        >
-          <el-option
-            v-for="d in availableDomains"
-            :key="d.id"
-            :label="d.name"
-            :value="d.id"
-          >
-            <span style="font-weight: 600;">{{ d.name }}</span>
-            <span v-if="d.books && d.books.length" style="color: #9CA3AF; font-size: 11px; margin-left: 6px;">
-              ({{ d.books.slice(0,2).join('/') }})
-            </span>
-          </el-option>
-        </el-select>
-
-        <el-button size="small" :type="presentMode ? 'warning' : 'default'" @click="presentMode = !presentMode">
-          <el-icon :size="14"><VideoPlay /></el-icon> {{ presentMode ? '退出演示' : '答辩模式' }}
-        </el-button>
-        <el-radio-group v-model="viewMode" size="small">
-          <el-radio-button value="graph">Graph 视图</el-radio-button>
-          <el-radio-button value="timeline">阶段视图</el-radio-button>
-        </el-radio-group>
-      </div>
+    <!-- Domain selector + Legend (always visible for system tab) -->
+    <div class="kg-top-r">
+      <el-select v-model="currentDomain" placeholder="切换学习领域" size="small" style="width:180px;margin-right:8px" @change="switchDomain">
+        <el-option v-for="d in availableDomains" :key="d.id" :label="d.name" :value="d.id" />
+      </el-select>
+      <el-button size="small" :type="presentMode ? 'warning' : 'default'" @click="presentMode = !presentMode">
+        <el-icon :size="14"><VideoPlay /></el-icon> {{ presentMode ? '退出演示' : '答辩模式' }}
+      </el-button>
+      <el-radio-group v-model="viewMode" size="small">
+        <el-radio-button value="graph">Graph 视图</el-radio-button>
+        <el-radio-button value="timeline">阶段视图</el-radio-button>
+      </el-radio-group>
     </div>
 
-    <!-- ═══════════ Legend Bar ═══════════ -->
+    <!-- Tab: System Graph -->
+    <div v-if="graphMode === 'system'">
+      <span v-if="domainName" class="kg-domain-badge">{{ domainName }}</span>
+      <span v-if="previewMode" class="kg-preview-badge">预览模式 — 对话后自动匹配领域</span>
+
+    <!-- Legend Bar -->
     <div class="kg-legend">
       <div v-for="l in legendItems" :key="l.label" class="legend-chip">
         <span class="legend-dot" :style="{ background: l.color }" />
@@ -188,11 +172,12 @@
       </aside>
     </div>
     </div>
+    </div>
 
     <!-- Tab: Custom Graph -->
-    <div v-show="graphMode === 'custom'">
-        <CustomGraphView />
-      </div>
+    <div v-else class="kg-main" style="padding:24px">
+      <CustomGraphView />
+    </div>
 </template>
 
 <script setup lang="ts">
