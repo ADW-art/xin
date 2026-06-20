@@ -961,6 +961,33 @@ async def chat_send(
                             assistant_content += safe_msg
                             yield f"event: message\ndata: {json.dumps({'content': safe_msg, 'agent': agent_name}, ensure_ascii=False)}\n\n"
 
+            # 评估报告：追加 Mermaid 饼图（后端生成，不受 LLM 影响）
+            if assistant_agent == "evaluation_agent" and user_id:
+                try:
+                    from app.services.bkt_service import get_tracker
+                    tracker = get_tracker(user_id)
+                    nodes = tracker.to_dict().get("nodes", {})
+                    # 如果 BKT 为空，从 profile knowledge_base 构建 Mermaid
+                    if not nodes:
+                        profile = _load_profile(user_id)
+                        kb = (profile or {}).get("knowledge_base", {}) or {}
+                        if isinstance(kb, dict) and kb:
+                            mastered = sum(1 for v in kb.values() if isinstance(v, (int, float)) and v >= 70)
+                            learning = sum(1 for v in kb.values() if isinstance(v, (int, float)) and 35 <= v < 70)
+                            beginner = sum(1 for v in kb.values() if isinstance(v, (int, float)) and v < 35)
+                            total = mastered + learning + beginner
+                    else:
+                        mastered = sum(1 for n in nodes.values() if isinstance(n, dict) and n.get("p_known", 0) >= 0.7)
+                        learning = sum(1 for n in nodes.values() if isinstance(n, dict) and 0.35 <= n.get("p_known", 0) < 0.7)
+                        beginner = sum(1 for n in nodes.values() if isinstance(n, dict) and n.get("p_known", 0) < 0.35)
+                        total = mastered + learning + beginner
+                    if total > 0:
+                        mm = f"\n\n```mermaid\npie title 知识点掌握分布 (共{total}个)\n    \"已掌握(>=70%)\" : {mastered}\n    \"学习中(35-70%)\" : {learning}\n    \"入门(<35%)\" : {beginner}\n```\n"
+                        assistant_content += mm
+                        yield f"event: message\ndata: {json.dumps({'content': mm, 'agent': 'evaluation_agent'}, ensure_ascii=False)}\n\n"
+                except Exception:
+                    pass
+
             yield f"event: done\ndata: {json.dumps({'status': 'complete', 'agent_switches': _agent_switch_count})}\n\n"
 
             if user_id and assistant_content:
