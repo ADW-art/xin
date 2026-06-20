@@ -260,15 +260,29 @@ def _post_agent_event_hook(agent_name: str, user_id: int, agent_outputs: dict):
 
         # ── 事件4: Profile Agent 画像采集完成 → 推测试/路径 ──
         elif agent_name == "profile_agent":
-            p_meta = agent_outputs.get("profile_agent", {})
-            if p_meta.get("profile_data") and len(p_meta.get("profile_data", {})) >= 3:
-                _store_suggestion(user_id, "path", {
-                    "reason": "画像采集完成，推荐规划学习路径",
-                    "priority": "medium",
-                })
+            _store_suggestion(user_id, "path", {
+                "reason": "画像更完善了，要不要规划一下学习路径？",
+                "priority": "medium",
+            })
+
+        # ── 所有Agent完成后的通用建议 ──
+        if agent_name not in ("profile_agent",):
+            _store_suggestion(user_id, agent_name.replace("_agent", ""), {
+                "reason": _get_agent_suggestion_text(agent_name),
+                "priority": "low",
+            })
 
     except Exception as e:
         logger.warning("事件驱动钩子失败: %s", e)
+
+def _get_agent_suggestion_text(agent_name: str) -> str:
+    return {
+        "resource_agent": "刚学完一个知识点，做两道题巩固一下吧",
+        "question_agent": "题目做完了，看看评估报告了解自己的掌握情况",
+        "evaluation_agent": "评估完成了，根据薄弱点针对学习效果更好",
+        "path_agent": "路径规划好了，开始第一个知识点的学习吧",
+        "profile_agent": "画像更完善了，系统能更好地为你个性化推荐",
+    }.get(agent_name, "继续探索更多学习功能")
 
 
 def _store_suggestion(user_id: int, intent: str, context: dict):

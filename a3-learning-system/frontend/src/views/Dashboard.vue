@@ -323,7 +323,7 @@ function loadSuggestions() {
   if (Array.isArray(s) && s.length > 0) {
     // 过滤掉过期的建议 (30分钟内)
     const now = Date.now() / 1000
-    suggestions.value = s.filter((sg: any) => !sg.ts || (now - sg.ts) < 1800)
+    suggestions.value = s.filter((sg: any) => !sg.ts || (now - sg.ts) < 86400)
   }
 }
 
@@ -354,8 +354,14 @@ function handleSuggestion(sg: any) {
 
 // ═══════════ Helpers ═══════════
 function styleLabel(v?: string) {
+  if (!v) return ''
   const map: Record<string,string> = { visual: '视觉型', auditory: '听觉型', kinesthetic: '动手型', reading: '阅读型' }
-  return map[v||''] || v || ''
+  if (map[v]) return map[v]
+  // Fallback: normalize raw Chinese text to standard labels
+  if (/写代码|动手|敲|做项目|实践|操作|kinesthetic|hands.on/i.test(v)) return '动手型'
+  if (/看|读|视觉|图|视频|visual|watch/i.test(v)) return '视觉型'
+  if (/听|音频|auditory|listen/i.test(v)) return '听觉型'
+  return v.length > 10 ? v.slice(0, 8) + '...' : v
 }
 function goalLabel(v?: string) {
   const map: Record<string,string> = { exam: '考试备考', skill: '技能提升', career: '职业发展', interest: '兴趣学习' }

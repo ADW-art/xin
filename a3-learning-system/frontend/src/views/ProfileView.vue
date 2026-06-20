@@ -279,7 +279,16 @@ const styleMap: Record<string, { label: string; icon: string }> = {
   kinesthetic: { label: '动觉型', icon: 'Promotion' },
   reading: { label: '阅读型', icon: 'Reading' },
 }
-const styleLabel = computed(() => styleMap[profileData.value.cognitive_style ?? '']?.label ?? profileData.value.cognitive_style)
+function normalizeStyle(raw: string | null | undefined): string {
+  if (!raw) return ''
+  const map: Record<string,string> = { visual: '视觉型', auditory: '听觉型', kinesthetic: '动手型', reading: '阅读型' }
+  if (map[raw]) return map[raw]
+  if (/写代码|动手|敲|做项目|实践|操作|kinesthetic|hands.on/i.test(raw)) return '动手型'
+  if (/看|读|视觉|图|视频|visual|watch/i.test(raw)) return '视觉型'
+  if (/听|音频|auditory|listen/i.test(raw)) return '听觉型'
+  return raw
+}
+const styleLabel = computed(() => normalizeStyle(profileData.value.cognitive_style))
 const styleIcon = computed(() => styleMap[profileData.value.cognitive_style ?? '']?.icon ?? 'View')
 
 const goalMap: Record<string, { label: string; icon: string }> = {
