@@ -578,4 +578,3 @@ a:hover { color: var(--primary-hover); }
   .profile-grid { grid-template-columns: 1fr; }
   .hero h1 { font-size: 20px; }
 }
-}
