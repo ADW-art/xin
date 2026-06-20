@@ -675,7 +675,6 @@ onMounted(async () => {
   } catch (error) {
     console.warn('AgentCenter: 历史数据加载异常', error)
   }
-  loading.value = false
 })
 
 onUnmounted(() => {
