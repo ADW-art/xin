@@ -875,4 +875,13 @@ onBeforeUnmount(() => {
 .tl-node-tag.unknown { background: #F3F4F6; color: #94A3B8; }
 .tl-phase-meta { font-size: 11px; color: #9CA3AF; }
 .tl-phase-meta span + span::before { content: ' · '; }
+
+/* Review reminders */
+.review-panel { border-color: var(--blue-primary-light) !important; background: var(--bg-input) !important; }
+.review-concept { width: 80px; flex-shrink: 0; font-weight: 500; color: var(--blue-slate); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.review-bar-wrap { flex: 1; height: 6px; background: var(--bg-muted); border-radius: 3px; overflow: hidden; }
+.review-bar { height: 100%; border-radius: 3px; transition: width .3s; }
+.review-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: var(--font-xs); }
+.review-pct { width: 36px; text-align: right; font-weight: 600; color: var(--text-secondary); flex-shrink: 0; }
+.review-date { width: 60px; text-align: right; color: var(--text-muted); font-size: 11px; flex-shrink: 0; }
 </style>

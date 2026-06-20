@@ -947,4 +947,12 @@ onMounted(() => { loadAll(); loadAgentStats() })
     padding: 6px 7px;
   }
 }
+
+/* Suggestion panel */
+.sg-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: #FFFFFF; border: 1px solid #E8ECF1; border-radius: 8px; cursor: pointer; transition: all .15s; margin-bottom: 6px; }
+.sg-item:hover { border-color: #93C5FD; background: #FAFCFF; }
+.sg-item:last-child { margin-bottom: 0; }
+.sg-icon { color: var(--primary); flex-shrink: 0; }
+.sg-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.sg-action { font-size: 11px; color: var(--primary); font-weight: 600; margin-top: 2px; }
 </style>
