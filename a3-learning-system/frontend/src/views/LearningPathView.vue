@@ -159,7 +159,11 @@
 
         <!-- Review reminders -->
         <div v-if="reviewItems.length > 0" class="kg-panel review-panel">
-          <div class="kg-panel-hd">📅 复习提醒 (艾宾浩斯)</div>
+          <div class="kg-panel-hd">
+            <el-icon :size="14"><Clock /></el-icon>
+            <span>复习提醒</span>
+            <span style="font-size:11px;color:#94A3B8;font-weight:400;">艾宾浩斯</span>
+          </div>
           <div class="kg-panel-bd">
             <div v-for="(r, ri) in reviewItems.slice(0, 5)" :key="ri" class="review-row">
               <span class="review-concept">{{ r.concept }}</span>
