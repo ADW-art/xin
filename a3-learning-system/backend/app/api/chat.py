@@ -958,6 +958,17 @@ async def chat_send(
                 _extract_and_boost(user_id, request.content)
                 _silent_profile_collect(user_id, request.content)
 
+            # v4: 推送智能建议 (SSE suggestion事件) — 前端弹窗提醒下一步操作
+            if user_id and assistant_agent:
+                try:
+                    profile = _load_profile(user_id)
+                    sg_list = (profile or {}).get('suggestions', []) or []
+                    if sg_list:
+                        latest = sg_list[-1]
+                        yield f"event: suggestion\ndata: {json.dumps(latest, ensure_ascii=False)}\n\n"
+                except Exception:
+                    pass
+
         except Exception as e:
             logger.error("SSE: event_stream 异常: %s", e)
             err_type = type(e).__name__
