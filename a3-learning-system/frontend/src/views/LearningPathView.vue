@@ -949,23 +949,23 @@ onBeforeUnmount(() => {
 .tl-phase-meta { font-size: 11px; color: #9CA3AF; }
 .tl-phase-meta span + span::before { content: ' · '; }
 
-/* Review reminders */
-.review-panel { border-color: var(--blue-primary-light) !important; background: var(--bg-input) !important; }
-.review-concept { width: 80px; flex-shrink: 0; font-weight: 500; color: var(--blue-slate); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.review-bar-wrap { flex: 1; height: 6px; background: var(--bg-muted); border-radius: 3px; overflow: hidden; }
+/* Review reminders (参照RAG页面配色: #2563EB blue, #F1F5F9 bg, #E2E8F0 border) */
+.review-panel { border: 1px solid var(--border) !important; background: var(--bg-card) !important; }
+.review-concept { width: 80px; flex-shrink: 0; font-weight: 500; color: #475569; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.review-bar-wrap { flex: 1; height: 5px; background: #F1F5F9; border-radius: 3px; overflow: hidden; }
 .review-bar { height: 100%; border-radius: 3px; transition: width .3s; }
-.review-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: var(--font-xs); }
-.review-pct { width: 36px; text-align: right; font-weight: 600; color: var(--text-secondary); flex-shrink: 0; }
-.review-date { width: 60px; text-align: right; color: var(--text-muted); font-size: 11px; flex-shrink: 0; }
+.review-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 12px; }
+.review-pct { width: 36px; text-align: right; font-weight: 600; color: #475569; flex-shrink: 0; }
+.review-date { width: 60px; text-align: right; color: #94A3B8; font-size: 11px; flex-shrink: 0; }
 
-/* Custom Graph Builder */
-.custom-graph-section { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px; }
+/* Custom Graph Builder (参照RAG页面: white cards, #E2E8F0 borders) */
+.custom-graph-section { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
 .custom-graph-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
-.custom-graph-canvas { position: relative; min-height: 300px; background: var(--bg-page); border: 1px dashed var(--border); border-radius: var(--radius-md); margin-bottom: 12px; overflow: hidden; }
-.custom-node { position: absolute; background: var(--bg-card); border: 2px solid var(--primary); border-radius: 8px; padding: 8px 12px; cursor: move; font-size: 13px; font-weight: 500; }
-.custom-node-label { color: var(--text-primary); }
-.custom-node-del { position: absolute; top: -8px; right: -8px; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--red); background: var(--bg-card); color: var(--red); font-size: 10px; cursor: pointer; display: none; }
+.custom-graph-canvas { position: relative; min-height: 300px; background: #F1F5F9; border: 1px dashed #E2E8F0; border-radius: 10px; margin-bottom: 12px; overflow: hidden; }
+.custom-node { position: absolute; background: var(--bg-card); border: 2px solid #2563EB; border-radius: 8px; padding: 8px 12px; cursor: move; font-size: 13px; font-weight: 500; }
+.custom-node-label { color: #0F172A; }
+.custom-node-del { position: absolute; top: -8px; right: -8px; width: 18px; height: 18px; border-radius: 50%; border: 1px solid #EF4444; background: var(--bg-card); color: #EF4444; font-size: 10px; cursor: pointer; display: none; }
 .custom-node:hover .custom-node-del { display: block; }
-.custom-graph-hint { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); color: var(--text-muted); font-size: 14px; }
+.custom-graph-hint { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); color: #94A3B8; font-size: 14px; }
 .custom-graph-actions { display: flex; gap: 8px; align-items: center; }
 </style>
