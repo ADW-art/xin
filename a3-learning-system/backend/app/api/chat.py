@@ -961,6 +961,33 @@ async def chat_send(
                             assistant_content += safe_msg
                             yield f"event: message\ndata: {json.dumps({'content': safe_msg, 'agent': agent_name}, ensure_ascii=False)}\n\n"
 
+            # 教学资源/评估：追加 Mermaid 图表（后端生成）
+            if user_id and assistant_content:
+                try:
+                    from app.services.bkt_service import get_tracker as _gt
+                    tracker3 = _gt(user_id)
+                    all_nodes = tracker3.to_dict().get("nodes", {})
+                    if not all_nodes:
+                        profile_kb2 = _load_profile(user_id)
+                        kb2 = (profile_kb2 or {}).get("knowledge_base", {}) or {}
+                        all_nodes = {k: {"p_known": v/100} for k, v in kb2.items() if isinstance(v, (int, float))}
+                    if all_nodes:
+                        concepts = [(n, d.get("p_known", 0) if isinstance(d, dict) else d) for n, d in all_nodes.items()]
+                        concepts.sort(key=lambda x: -x[1])
+                        mastered = sum(1 for _, pk in concepts if pk >= 0.7)
+                        learning = sum(1 for _, pk in concepts if 0.35 <= pk < 0.7)
+                        new = sum(1 for _, pk in concepts if pk < 0.35)
+                        total = len(concepts)
+                        if total > 0:
+                            mm = f"\n\n```mermaid\npie title Knowledge ({total} concepts)\n"
+                            mm += f'    "Mastered(>=70%)" : {mastered}\n'
+                            mm += f'    "Learning(35-70%)" : {learning}\n'
+                            mm += f'    "New(<35%)" : {new}\n```\n'
+                            assistant_content += mm
+                            yield f"event: message\ndata: {json.dumps({'content': mm, 'agent': (assistant_agent or 'system')}, ensure_ascii=False)}\n\n"
+                except Exception:
+                    pass
+
             # 评估报告：追加 Mermaid 饼图（后端生成，不受 LLM 影响）
             if assistant_agent == "evaluation_agent" and user_id:
                 try:
