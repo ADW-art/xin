@@ -23,3 +23,4 @@ class ProfileResponse(BaseModel):
     error_patterns: list | None = None
     preferred_resource_type: str | None = None
     dimension_scores: dict | None = None
+    suggestions: list | None = None  # Agent联动建议列表，Dashboard主动推送用

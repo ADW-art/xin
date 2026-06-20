@@ -121,6 +121,25 @@
         </div>
       </div>
 
+      <!-- 智能推荐 — Agent联动建议 -->
+      <div v-if="suggestions.length > 0" class="panel panel-suggestions">
+        <div class="panel-hd">
+          <el-icon :size="16"><Sunny /></el-icon>
+          <span>智能推荐</span>
+          <span class="panel-hint">Agent 自动分析</span>
+        </div>
+        <div class="panel-bd">
+          <div v-for="(sg, i) in suggestions.slice(0, 3)" :key="i" class="sg-item" @click="handleSuggestion(sg)">
+            <span class="sg-icon">{{ sgIcon(sg.intent) }}</span>
+            <div class="sg-info">
+              <span class="sg-reason">{{ sg.reason }}</span>
+              <span class="sg-action">{{ sgLabel(sg.intent) }}</span>
+            </div>
+            <el-icon :size="14"><ArrowRight /></el-icon>
+          </div>
+        </div>
+      </div>
+
       <!-- Agent 调用统计 (真实数据: chat history agent_type 计数) -->
       <div class="panel panel-agent-stats">
         <div class="panel-hd">
@@ -295,6 +314,44 @@ function checkNewUser() {
   isNewUser.value = !hasProfileData && !hasResources && !hasBKT
 }
 
+// ═══════════ 智能推荐 (Agent联动建议) ═══════════
+const suggestions = ref<any[]>([])
+
+function loadSuggestions() {
+  // 从 profile.suggestions 读取 Agent 联动建议
+  const s = profile.value?.suggestions
+  if (Array.isArray(s) && s.length > 0) {
+    // 过滤掉过期的建议 (30分钟内)
+    const now = Date.now() / 1000
+    suggestions.value = s.filter((sg: any) => !sg.ts || (now - sg.ts) < 1800)
+  }
+}
+
+const SUGGESTION_ICONS: Record<string, string> = {
+  evaluation: '📊', resource: '📚', question: '✏️', path: '🗺️', profile: '👤'
+}
+function sgIcon(intent: string) { return SUGGESTION_ICONS[intent] || '💡' }
+
+const SUGGESTION_ACTIONS: Record<string, string> = {
+  evaluation: '去做评估 →', resource: '去学习 →', question: '去练习 →',
+  path: '去规划 →', profile: '去完善画像 →'
+}
+function sgLabel(intent: string) { return SUGGESTION_ACTIONS[intent] || '去看看 →' }
+
+function handleSuggestion(sg: any) {
+  const routes: Record<string, string> = {
+    evaluation: '/assessment', resource: '/chat', question: '/chat',
+    path: '/chat', profile: '/profile'
+  }
+  const to = routes[sg.intent] || '/chat'
+  // 如果是学习/练习/路径，携带预设提示词
+  if (sg.intent === 'resource' || sg.intent === 'question' || sg.intent === 'path') {
+    router.push({ path: '/chat', query: { prompt: sg.reason } })
+  } else {
+    router.push(to)
+  }
+}
+
 // ═══════════ Helpers ═══════════
 function styleLabel(v?: string) {
   const map: Record<string,string> = { visual: '视觉型', auditory: '听觉型', kinesthetic: '动手型', reading: '阅读型' }
@@ -350,6 +407,7 @@ async function loadAll() {
     const p = profileRes.data
     profile.value = p
     profileLoading.value = false
+    loadSuggestions()
     const kb = p.knowledge_base || {}
     const ds = p.dimension_scores || {}
 
@@ -713,6 +771,22 @@ onMounted(() => { loadAll(); loadAgentStats() })
 .ws-title { font-size: 13px; font-weight: 600; color: #1F2937; }
 .ws-desc { font-size: 11px; color: #9CA3AF; margin-top: 2px; }
 .welcome-step .el-icon { color: #C4CCD6; flex-shrink: 0; }
+
+/* ── 智能推荐面板 ── */
+.panel-suggestions { border-color: rgba(245,158,11,.2); background: #FFFCF5; }
+.sg-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px;
+  background: #FFFFFF; border: 1px solid #FDE68A; border-radius: 8px;
+  cursor: pointer; transition: all .15s; margin-bottom: 6px;
+}
+.sg-item:last-child { margin-bottom: 0; }
+.sg-item:hover { border-color: #F59E0B; box-shadow: 0 1px 4px rgba(245,158,11,.15); }
+.sg-icon { font-size: 20px; flex-shrink: 0; }
+.sg-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.sg-reason { font-size: 13px; color: #4B5563; line-height: 1.4; }
+.sg-action { font-size: 11px; color: #F59E0B; font-weight: 600; margin-top: 2px; }
+.sg-item .el-icon { color: #9CA3AF; flex-shrink: 0; }
 
 /* ═══════════ Center — Agent Stats ═══════════ */
 .agent-stats-row {
