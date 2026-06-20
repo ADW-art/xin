@@ -25,6 +25,7 @@ from app.api.conversation import router as conversation_router
 from app.api.admin import router as admin_router
 from app.api.bkt import router as bkt_router
 from app.api.agent_trace import router as agent_trace_router
+from app.api.tts import router as tts_router
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,7 @@ app.include_router(conversation_router)
 app.include_router(admin_router)
 app.include_router(bkt_router)
 app.include_router(agent_trace_router)
+app.include_router(tts_router)
 
 @app.on_event("startup")
 async def init_db():

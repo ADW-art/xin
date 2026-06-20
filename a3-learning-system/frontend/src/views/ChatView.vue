@@ -183,7 +183,7 @@ import { sendMessageStream } from '@/api/chat'
 import type { SSEChunk, SendImage } from '@/api/chat'
 import ChatMessage from '@/components/chat/ChatMessage.vue'
 import ChatInput from '@/components/chat/ChatInput.vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import api from '@/api/index'
 import dayjs from 'dayjs'
 
@@ -424,6 +424,31 @@ function handleSend(content: string, images?: ChatImage[]) {
       // ── 资源元数据：附加到当前流式消息 ──
       if (data.type === 'resource' && data.resource_type) {
         store.setResource(data.resource_type, data.resource_id || 0, data.title || '学习资源')
+        return
+      }
+
+      // ── 智能建议推送：Agent分析完成后的下一步推荐 ──
+      if (data.type === 'suggestion' && data.intent) {
+        const routes: Record<string, string> = {
+          evaluation: '/assessment', resource: '/chat', question: '/chat', path: '/chat', profile: '/profile'
+        }
+        const labels: Record<string, string> = {
+          evaluation: '去做评估', resource: '去学习', question: '去练习', path: '去规划', profile: '完善画像'
+        }
+        ElNotification({
+          title: '智能推荐',
+          message: data.reason || '系统根据你的学习状态推荐下一步操作',
+          type: 'info',
+          duration: 5000,
+          onClick: () => {
+            const to = routes[data.intent] || '/chat'
+            if (data.intent !== 'profile') {
+              router.push({ path: '/chat', query: { prompt: data.reason } })
+            } else {
+              router.push(to)
+            }
+          },
+        })
         return
       }
 
