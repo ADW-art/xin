@@ -284,7 +284,13 @@
           <div class="detail-section" v-if="selectedAgentDetail.keywords?.length">
             <h4 class="detail-section-title">触发关键词</h4>
             <div class="keywords-wrap">
-              <span v-for="kw in selectedAgentDetail.keywords.slice(0, 8)" :key="kw" class="keyword-pill">{{ kw }}</span>
+              <span
+                v-for="kw in selectedAgentDetail.keywords.slice(0, 8)"
+                :key="kw"
+                class="keyword-pill clickable"
+                @click="quickChat(selectedAgentDetail.name, kw)"
+                :title="'点击快速调用 ' + selectedAgentDetail.displayName"
+              >{{ kw }}</span>
             </div>
           </div>
         </div>
@@ -299,6 +305,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useChatStore } from '@/stores/chat'
 import api from '@/api/index'
 
@@ -309,7 +316,7 @@ const canvasWidth = 720
 const canvasHeight = 420
 
 // ── 状态变量 ──
-const loading = ref(true)
+// (loading ref removed — unused)
 const isSystemActive = ref(false)
 const selectedAgent = ref<string | null>(null)
 const traces = ref<any[]>([])
@@ -417,11 +424,7 @@ const supervisorPos = computed(() => ({ x: canvasWidth / 2, y: 70 }))
 const workerAgents = computed(() => Object.values(agentsRegistry).filter(a => a.category === 'worker'))
 const allAgents = computed(() => Object.values(agentsRegistry))
 const selectedAgentDetail = computed(() => selectedAgent.value ? agentsRegistry[selectedAgent.value] : null)
-const hasActivity = computed(() => sessionStats.totalRoutes > 0)
-const activeAgents = computed(() => sessionStats.activeAgents)
-const totalRoutes = computed(() => sessionStats.totalRoutes)
-const totalTokens = computed(() => sessionStats.totalTokens)
-const sessionDuration = computed(() => sessionStats.duration)
+// (deprecated computed wrappers removed — template reads sessionStats directly)
 
 // 边路径计算
 const computedEdges = computed(() => {
@@ -568,6 +571,46 @@ watch(
 )
 
 // ── 加载历史数据 ──
+const router = useRouter()
+
+// Keyword → prompt mapping: 关键词触发的对话提示词（对标官网Agent功能）
+const KEYWORD_PROMPTS: Record<string, string> = {
+  '意图识别': '你好，我想了解一下学习系统',
+  '任务路由': '帮我规划Python学习路线',
+  '流程协调': '我想系统学习Python，从基础开始',
+  '结果汇总': '给我做一份学习评估报告',
+  '画像采集': '我想完善我的学习画像',
+  '学习风格': '我更喜欢动手写代码来学习',
+  '认知分析': '分析一下我的学习情况',
+  '个性化': '根据我的画像推荐学习内容',
+  '资源生成': '生成Python装饰器的知识文档',
+  '教材制作': '帮我写Python入门教程',
+  '思维导图': '生成Python基础知识的思维导图',
+  '案例编写': '写一个Python文件读写的代码示例',
+  '智能出题': '出3道Python算法练习题',
+  '难度自适应': '根据我的水平出Python题目',
+  '错题追踪': '给我出几道之前做错的类似题目',
+  '练习生成': '给我出几道Python基础练习题',
+  '效果评估': '给我做一份Python学习评估报告',
+  '能力分析': '评估我当前的Python掌握情况',
+  '薄弱诊断': '分析一下我的Python薄弱环节',
+  '改进建议': '给我一些Python学习的改进建议',
+  '路径规划': '帮我规划Python学习路线',
+  '学习计划': '制定一个30天Python学习计划',
+  '进度管理': '帮我检查当前的学习进度',
+  '里程碑': '帮我设定Python学习的阶段目标',
+  '对话问答': 'Python装饰器是什么',
+  '概念解释': '解释一下Python的闭包概念',
+  '引导学习': '我想学Python，从哪里开始',
+  '日常交互': '你好，今天适合学什么',
+}
+
+function quickChat(agentName: string, keyword: string) {
+  const prompt = KEYWORD_PROMPTS[keyword] || keyword
+  // 导航到对话页并通过 query 参数传递预设提示词
+  router.push({ path: '/chat', query: { prompt, agent: agentName } })
+}
+
 onMounted(async () => {
   try {
     const [manifestResult, historyResult] = await Promise.all([

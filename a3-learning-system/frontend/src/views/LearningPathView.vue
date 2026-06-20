@@ -228,14 +228,6 @@ function statusLabel(s: string) {
   const m: Record<string,string> = { mastered:'精通', learning:'熟悉', familiar:'学习中', beginner:'入门', unknown:'未学习' }
   return m[s] || s
 }
-function nodeColor(s: string) {
-  const m: Record<string,string> = { mastered:'#10B981', learning:'#2563EB', familiar:'#F59E0B', beginner:'#8B5CF6', unknown:'#94A3B8' }
-  return m[s] || '#94A3B8'
-}
-function nodeSize(s: string): number {
-  const m: Record<string,number> = { mastered:28, learning:26, familiar:22, beginner:18, unknown:16 }
-  return m[s] || 16
-}
 /** 基于 p_known 的动态节点大小：掌握度越高节点越大 (16-30px 范围) */
 function dynamicNodeSize(p_known: number): number {
   if (p_known <= 0) return 16
@@ -471,7 +463,6 @@ function handleGraphData(graph: any) {
 // Phase order & labels from KG v2 files
 const PHASE_ORDER: Record<string, number> = { foundation: 1, core: 2, advanced: 3, practice: 4 }
 const PHASE_LABELS: Record<string, string> = { foundation: '入门基础', core: '核心能力', advanced: '进阶深入', practice: '工程实战' }
-const PHASE_COLORS: Record<string, string> = { foundation: '#3B82F6', core: '#10B981', advanced: '#F59E0B', practice: '#8B5CF6' }
 
 function computePhases() {
   // Use user's actual weekly_hours from profile, fallback to 10
@@ -493,39 +484,6 @@ function computePhases() {
     done: false, current: false,
   }))
   return
-
-  // --- deprecated: old topological sort ---
-  const _inDegree: Record<string, number> = {}
-  nodes.value.forEach(n => { _inDegree[n.id] = n.deps.length })
-  const _remaining = new Set(nodes.value.map(n => n.id))
-  const _result: Phase[] = []
-  let _phaseNum = 1
-
-  while (_remaining.size > 0) {
-    const current = [...remaining].filter(id => inDegree[id] === 0)
-    if (current.length === 0) break
-
-    const phaseNodes = current.map(id => nodes.value.find(n => n.id === id)!).filter(Boolean)
-    const done = phaseNodes.every(n => n.status === 'mastered')
-    const anyDone = phaseNodes.some(n => n.status === 'mastered' || n.status === 'learning')
-
-    result.push({
-      title: `阶段 ${phaseNum}`,
-      nodes: phaseNodes.map(n => ({ label: n.label, status: n.status })),
-      done,
-      current: anyDone && !done,
-      estimatedHours: phaseNodes.length * 1.5,
-      estimatedWeeks: phaseNum <= 2 ? phaseNum : undefined,
-    })
-
-    current.forEach(id => {
-      remaining.delete(id)
-      const node = nodes.value.find(n => n.id === id)
-      if (node) node.dependents.forEach(dep => { if (inDegree[dep] > 0) inDegree[dep]-- })
-    })
-    phaseNum++
-  }
-  phases.value = result
 }
 
 // ═══════════ Data Loading ═══════════

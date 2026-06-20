@@ -39,6 +39,15 @@
               <span v-if="convo.agentType" class="hi-agent" :style="{ color: agentColor(convo.agentType) }">
                 {{ convo.agentType }}
               </span>
+              <el-button
+                text
+                size="small"
+                class="hi-delete-btn"
+                @click.stop="deleteConversation(convo)"
+                :loading="convo._deleting"
+              >
+                <el-icon :size="14"><Close /></el-icon>
+              </el-button>
             </div>
             <div class="hi-text">{{ convo.preview }}</div>
           </div>
@@ -168,11 +177,13 @@
 
 <script setup lang="ts">
 import { ref, nextTick, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useChatStore } from '@/stores/chat'
 import { sendMessageStream } from '@/api/chat'
 import type { SSEChunk, SendImage } from '@/api/chat'
 import ChatMessage from '@/components/chat/ChatMessage.vue'
 import ChatInput from '@/components/chat/ChatInput.vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '@/api/index'
 import dayjs from 'dayjs'
 
@@ -296,6 +307,31 @@ async function fetchHistory() {
   } finally {
     historyLoading.value = false
     _fetchingHistory = false
+  }
+}
+
+async function deleteConversation(convo: ConvoGroup) {
+  // 删除对话组中的所有消息
+  try {
+    await ElMessageBox.confirm('确定删除这条对话记录吗？', '确认删除', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch { return }
+  try {
+    for (const id of convo.messageIds) {
+      await api.delete(`/chat/history/${id}`)
+    }
+    // 如果删除的是当前活跃对话，清空聊天
+    if (convo.id === activeConvoId.value) {
+      store.clearMessages()
+      activeConvoId.value = null
+    }
+    ElMessage.success('已删除')
+    await fetchHistory()
+  } catch (e: unknown) {
+    ElMessage.error('删除失败')
   }
 }
 
@@ -442,7 +478,20 @@ function onScroll() {
   showScrollBtn.value = scrollHeight - scrollTop - clientHeight > 120
 }
 
-onMounted(fetchHistory)
+const route = useRoute()
+const router = useRouter()
+
+onMounted(() => {
+  fetchHistory()
+  // 处理从 AgentCenter 关键词点击过来的预设提示词
+  const prompt = route.query.prompt as string
+  if (prompt) {
+    // 延迟发送，等页面渲染完成
+    setTimeout(() => handleSend(prompt), 300)
+    // 清除 URL 参数避免刷新重复发送
+    router.replace({ path: '/chat', query: {} })
+  }
+})
 </script>
 
 <style scoped>
