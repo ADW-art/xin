@@ -81,6 +81,7 @@ const menu = [
   { to: '/rag',           label: 'RAG检索',    icon: 'Search' },
   { to: '/chat',          label: 'AI 对话',    icon: 'ChatDotRound' },
   { to: '/learning-path', label: '学习路径',   icon: 'Guide' },
+  { to: '/learning-path/custom-graph', label: '自建图谱', icon: 'Edit' },
   { to: '/profile',       label: '学习画像',   icon: 'User' },
   { to: '/resources',     label: '资源库',     icon: 'FolderOpened' },
   { to: '/assessment',    label: '评估报告',   icon: 'DataAnalysis' },
@@ -96,6 +97,7 @@ const pageLabels: Record<string, string> = {
   ResourceDetail: '资源详情',
   AssessmentView: '评估报告',
   LearningPathView: '学习路径',
+  CustomGraphView: '自定义知识图谱',
 }
 
 const currentPageLabel = computed(() => {
