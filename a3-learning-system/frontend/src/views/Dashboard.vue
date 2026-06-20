@@ -778,20 +778,20 @@ onMounted(() => { loadAll(); loadAgentStats() })
 .ws-desc { font-size: 11px; color: #9CA3AF; margin-top: 2px; }
 .welcome-step .el-icon { color: #C4CCD6; flex-shrink: 0; }
 
-/* ── 智能推荐面板 ── */
-.panel-suggestions { border-color: var(--blue-primary-light) !important; background: var(--bg-input) !important; }
+/* ── 智能推荐面板 (参照RAG页面配色) ── */
+.panel-suggestions { border: 1px solid var(--border) !important; background: var(--bg-card) !important; }
 .sg-item {
   display: flex; align-items: center; gap: 10px;
-  padding: 10px 12px;
-  background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
-  cursor: pointer; transition: all .15s; margin-bottom: 6px;
+  padding: 10px 12px; margin-bottom: 6px;
+  background: var(--bg-page); border: 1px solid var(--border); border-radius: 10px;
+  cursor: pointer; transition: all .2s;
 }
 .sg-item:last-child { margin-bottom: 0; }
-.sg-item:hover { border-color: #93C5FD; box-shadow: 0 1px 4px rgba(37,99,235,.08); }
-.sg-icon { font-size: 20px; flex-shrink: 0; color: var(--primary); }
+.sg-item:hover { border-color: #93C5FD; }
+.sg-icon { color: #2563EB; flex-shrink: 0; }
 .sg-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.sg-reason { font-size: 13px; color: var(--text-secondary); line-height: 1.4; }
-.sg-action { font-size: 11px; color: var(--primary); font-weight: 600; margin-top: 2px; }
+.sg-reason { font-size: 13px; color: #475569; line-height: 1.4; }
+.sg-action { font-size: 11px; color: #2563EB; font-weight: 600; margin-top: 2px; }
 
 /* ═══════════ Center — Agent Stats ═══════════ */
 .agent-stats-row {

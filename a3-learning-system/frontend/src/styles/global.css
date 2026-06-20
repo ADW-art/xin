@@ -547,22 +547,22 @@ a:hover { color: var(--primary-hover); }
   }
 }
 
-/* ── Resource Search ── */
+/* ── Resource Search (参照RAG页面配色) ── */
 .resource-search { max-width: 480px; margin-bottom: 20px; }
 
-/* ── Regenerate Button ── */
+/* ── Regenerate Button (参照RAG页面: #94A3B8 muted, #2563EB hover) ── */
 .regenerate-wrap { padding: 4px 20px 0; max-width: 82%; }
 .regenerate-btn { color: #94A3B8 !important; font-size: 12px; }
-.regenerate-btn:hover { color: var(--primary) !important; }
+.regenerate-btn:hover { color: #2563EB !important; }
 
-/* ── Review Reminders ── */
-.review-panel { border-color: var(--blue-primary-light) !important; background: var(--bg-input) !important; }
-.review-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: var(--font-xs); }
-.review-concept { width: 80px; flex-shrink: 0; font-weight: 500; color: var(--blue-slate); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.review-bar-wrap { flex: 1; height: 6px; background: var(--bg-muted); border-radius: 3px; overflow: hidden; }
+/* ── Review Reminders (参照RAG页面: #F1F5F9 bars, #E2E8F0 border, #475569 text) ── */
+.review-panel { border: 1px solid var(--border) !important; background: var(--bg-card) !important; }
+.review-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 12px; }
+.review-concept { width: 80px; flex-shrink: 0; font-weight: 500; color: #475569; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.review-bar-wrap { flex: 1; height: 5px; background: #F1F5F9; border-radius: 3px; overflow: hidden; }
 .review-bar { height: 100%; border-radius: 3px; transition: width .3s; }
-.review-pct { width: 36px; text-align: right; font-weight: 600; color: var(--text-secondary); flex-shrink: 0; }
-.review-date { width: 60px; text-align: right; color: var(--text-muted); font-size: 11px; flex-shrink: 0; }
+.review-pct { width: 36px; text-align: right; font-weight: 600; color: #475569; flex-shrink: 0; }
+.review-date { width: 60px; text-align: right; color: #94A3B8; font-size: 11px; flex-shrink: 0; }
 
 /* ── Mobile Responsive ── */
 @media (max-width: 768px) {
