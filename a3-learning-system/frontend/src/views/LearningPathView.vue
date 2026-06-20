@@ -60,6 +60,7 @@
 
     <!-- Normal Content（永远展示图谱，不再有空白引导页） -->
     <div v-else class="kg-main">
+      <div v-if="graphMode === 'system'">
       <!-- Graph View (ECharts Force-Directed Graph) -->
       <div v-show="viewMode === 'graph'" class="kg-graph-wrap">
         <div ref="chartRef" class="kg-chart" />
@@ -172,11 +173,11 @@
       </aside>
     </div>
     </div>
-    </div>
-
-    <!-- Tab: Custom Graph -->
-    <div v-else class="kg-main" style="padding:24px">
-      <CustomGraphView />
+      </div>
+      <!-- Custom tab inside kg-main -->
+      <div v-else style="padding:24px">
+        <CustomGraphView />
+      </div>
     </div>
 </template>
 
