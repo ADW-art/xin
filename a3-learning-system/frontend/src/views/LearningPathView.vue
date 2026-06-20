@@ -15,26 +15,42 @@
     </div>
 
     <!-- Tab: System Graph -->
-    <!-- Domain selector + Legend (always visible for system tab) -->
-    <div class="kg-top-r">
-      <el-select v-model="currentDomain" placeholder="切换学习领域" size="small" style="width:180px;margin-right:8px" @change="switchDomain">
-        <el-option v-for="d in availableDomains" :key="d.id" :label="d.name" :value="d.id" />
-      </el-select>
-      <el-button size="small" :type="presentMode ? 'warning' : 'default'" @click="presentMode = !presentMode">
-        <el-icon :size="14"><VideoPlay /></el-icon> {{ presentMode ? '退出演示' : '答辩模式' }}
-      </el-button>
-      <el-radio-group v-model="viewMode" size="small">
-        <el-radio-button value="graph">Graph 视图</el-radio-button>
-        <el-radio-button value="timeline">阶段视图</el-radio-button>
-      </el-radio-group>
-    </div>
-
-    <!-- Tab: System Graph -->
     <div v-if="graphMode === 'system'">
       <span v-if="domainName" class="kg-domain-badge">{{ domainName }}</span>
       <span v-if="previewMode" class="kg-preview-badge">预览模式 — 对话后自动匹配领域</span>
+      <div class="kg-top-r">
+        <!-- 领域选择器（参考美团：用户可切换不同领域图谱） -->
+        <el-select
+          v-model="currentDomain"
+          placeholder="切换学习领域"
+          size="small"
+          style="width: 180px; margin-right: 8px;"
+          @change="switchDomain"
+        >
+          <el-option
+            v-for="d in availableDomains"
+            :key="d.id"
+            :label="d.name"
+            :value="d.id"
+          >
+            <span style="font-weight: 600;">{{ d.name }}</span>
+            <span v-if="d.books && d.books.length" style="color: #9CA3AF; font-size: 11px; margin-left: 6px;">
+              ({{ d.books.slice(0,2).join('/') }})
+            </span>
+          </el-option>
+        </el-select>
 
-    <!-- Legend Bar -->
+        <el-button size="small" :type="presentMode ? 'warning' : 'default'" @click="presentMode = !presentMode">
+          <el-icon :size="14"><VideoPlay /></el-icon> {{ presentMode ? '退出演示' : '答辩模式' }}
+        </el-button>
+        <el-radio-group v-model="viewMode" size="small">
+          <el-radio-button value="graph">Graph 视图</el-radio-button>
+          <el-radio-button value="timeline">阶段视图</el-radio-button>
+        </el-radio-group>
+      </div>
+    </div>
+
+    <!-- ═══════════ Legend Bar ═══════════ -->
     <div class="kg-legend">
       <div v-for="l in legendItems" :key="l.label" class="legend-chip">
         <span class="legend-dot" :style="{ background: l.color }" />
@@ -60,7 +76,6 @@
 
     <!-- Normal Content（永远展示图谱，不再有空白引导页） -->
     <div v-else class="kg-main">
-      <div v-if="graphMode === 'system'">
       <!-- Graph View (ECharts Force-Directed Graph) -->
       <div v-show="viewMode === 'graph'" class="kg-graph-wrap">
         <div ref="chartRef" class="kg-chart" />
@@ -173,19 +188,18 @@
       </aside>
     </div>
     </div>
-      </div>
-      <!-- Custom tab inside kg-main -->
-      <div v-else style="padding:24px">
-        <CustomGraphView />
-      </div>
+
+    <!-- Tab: Custom Graph -->
+    <div v-else style="padding:24px">
+      <CustomGraphView />
     </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
+import CustomGraphView from '@/views/CustomGraphView.vue'
 import * as echarts from 'echarts'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import CustomGraphView from '@/views/CustomGraphView.vue'
 import api from '@/api/index'
 import { useUserStore } from '@/stores/user'
 
@@ -262,7 +276,10 @@ async function loadReviewData() {
   } catch { /* non-critical */ }
 }
 onMounted(() => { loadData(); loadReviewData() })
+
+// Custom graph builder
 const graphMode = ref<'system' | 'custom'>('system')
+const graphList = ref<any[]>([])
 
 // ═══════════ Helpers ═══════════
 function statusLabel(s: string) {
@@ -889,4 +906,14 @@ onBeforeUnmount(() => {
 .review-pct { width: 36px; text-align: right; font-weight: 600; color: #475569; flex-shrink: 0; }
 .review-date { width: 60px; text-align: right; color: #94A3B8; font-size: 11px; flex-shrink: 0; }
 
+/* Custom Graph Builder (参照RAG页面: white cards, #E2E8F0 borders) */
+.custom-graph-section { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
+.custom-graph-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+.custom-graph-canvas { position: relative; min-height: 300px; background: #F1F5F9; border: 1px dashed #E2E8F0; border-radius: 10px; margin-bottom: 12px; overflow: hidden; }
+.custom-node { position: absolute; background: var(--bg-card); border: 2px solid #2563EB; border-radius: 8px; padding: 8px 12px; cursor: move; font-size: 13px; font-weight: 500; }
+.custom-node-label { color: #0F172A; }
+.custom-node-del { position: absolute; top: -8px; right: -8px; width: 18px; height: 18px; border-radius: 50%; border: 1px solid #EF4444; background: var(--bg-card); color: #EF4444; font-size: 10px; cursor: pointer; display: none; }
+.custom-node:hover .custom-node-del { display: block; }
+.custom-graph-hint { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); color: #94A3B8; font-size: 14px; }
+.custom-graph-actions { display: flex; gap: 8px; align-items: center; }
 </style>
