@@ -87,10 +87,6 @@ cd backend
 # Windows
 python -m venv venv
 venv\Scripts\activate
-
-# macOS/Linux
-python3 -m venv venv
-source venv/bin/activate
 ```
 
 ### 5.2 安装依赖
