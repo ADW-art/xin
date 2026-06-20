@@ -5,9 +5,19 @@
       <div class="kg-top-l">
         <h1>知识图谱学习中心</h1>
         <p>基于知识图谱<strong>拓扑排序</strong>的动态学习路径规划 — 力导向布局，支持缩放拖拽</p>
-        <span v-if="domainName" class="kg-domain-badge">{{ domainName }}</span>
-        <span v-if="previewMode" class="kg-preview-badge">预览模式 — 对话后自动匹配领域</span>
       </div>
+      <div class="kg-top-r">
+        <el-radio-group v-model="graphMode" size="small">
+          <el-radio-button value="system">系统图谱</el-radio-button>
+          <el-radio-button value="custom">自建图谱</el-radio-button>
+        </el-radio-group>
+      </div>
+    </div>
+
+    <!-- Tab: System Graph -->
+    <template v-if="graphMode === 'system'">
+      <span v-if="domainName" class="kg-domain-badge">{{ domainName }}</span>
+      <span v-if="previewMode" class="kg-preview-badge">预览模式 — 对话后自动匹配领域</span>
       <div class="kg-top-r">
         <!-- 领域选择器（参考美团：用户可切换不同领域图谱） -->
         <el-select
@@ -177,12 +187,40 @@
         </div>
       </aside>
     </div>
+    </template>
+
+    <!-- Tab: Custom Graph -->
+    <template v-else>
+      <div class="custom-graph-section">
+        <div class="custom-graph-toolbar">
+          <el-input v-model="newGraphName" placeholder="输入新图谱名称..." size="small" style="width:200px" />
+          <el-button type="primary" size="small" @click="createGraph" :disabled="!newGraphName.trim()">创建图谱</el-button>
+          <el-select v-model="activeGraphId" placeholder="选择图谱" size="small" style="width:180px;margin-left:8px" @change="loadGraph">
+            <el-option v-for="g in graphList" :key="g.id" :label="g.name" :value="g.id" />
+          </el-select>
+          <el-button v-if="activeGraphId" size="small" type="danger" plain @click="deleteGraph">删除当前图谱</el-button>
+        </div>
+        <div class="custom-graph-canvas" v-if="activeGraphId">
+          <div v-for="(n, ni) in customNodes" :key="ni" class="custom-node" :style="{ left: n.x + 'px', top: n.y + 'px' }">
+            <span class="custom-node-label">{{ n.label }}</span>
+            <button class="custom-node-del" @click="removeNode(ni)">x</button>
+          </div>
+          <div class="custom-graph-hint" v-if="customNodes.length === 0">点击下方"添加节点"开始构建知识图谱</div>
+        </div>
+        <div class="custom-graph-actions">
+          <el-input v-model="newNodeLabel" placeholder="节点名称" size="small" style="width:150px" />
+          <el-button size="small" @click="addNode" :disabled="!newNodeLabel.trim()">添加节点</el-button>
+          <el-button size="small" type="primary" @click="saveGraph" :disabled="!activeGraphId">保存图谱</el-button>
+        </div>
+      </div>
+    </template>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import * as echarts from 'echarts'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '@/api/index'
 import { useUserStore } from '@/stores/user'
 
@@ -259,6 +297,41 @@ async function loadReviewData() {
   } catch { /* non-critical */ }
 }
 onMounted(() => { loadData(); loadReviewData() })
+
+// Custom graph builder
+const graphMode = ref<'system' | 'custom'>('system')
+const graphList = ref<any[]>([])
+const activeGraphId = ref<number | null>(null)
+const newGraphName = ref('')
+const newNodeLabel = ref('')
+const customNodes = ref<any[]>([])
+
+async function loadGraphList() {
+  try { const r = await api.get('/path/custom'); graphList.value = r.data || [] } catch { /* ok */ }
+}
+async function createGraph() {
+  if (!newGraphName.value.trim()) return
+  try { await api.post('/path/custom', { name: newGraphName.value, nodes: [], edges: [] }); newGraphName.value = ''; ElMessage.success('已创建'); await loadGraphList() } catch { ElMessage.error('创建失败') }
+}
+async function loadGraph() {
+  if (!activeGraphId.value) return
+  try { const r = await api.get(`/path/custom/${activeGraphId.value}`); customNodes.value = r.data?.nodes || [] } catch { ElMessage.error('加载失败') }
+}
+async function saveGraph() {
+  if (!activeGraphId.value) return
+  try { await api.put(`/path/custom/${activeGraphId.value}`, { nodes: customNodes.value }); ElMessage.success('已保存') } catch { ElMessage.error('保存失败') }
+}
+async function deleteGraph() {
+  if (!activeGraphId.value) return
+  try { await ElMessageBox.confirm('确定删除该图谱吗？', '警告', { type: 'warning' }); await api.delete(`/path/custom/${activeGraphId.value}`); activeGraphId.value = null; customNodes.value = []; await loadGraphList(); ElMessage.success('已删除') } catch { /* cancel */ }
+}
+function addNode() {
+  if (!newNodeLabel.value.trim()) return
+  customNodes.value.push({ label: newNodeLabel.value, x: 100 + Math.random() * 400, y: 80 + Math.random() * 300 })
+  newNodeLabel.value = ''
+}
+function removeNode(index: number) { customNodes.value.splice(index, 1) }
+onMounted(() => { loadGraphList() })
 
 // ═══════════ Helpers ═══════════
 function statusLabel(s: string) {
@@ -884,4 +957,15 @@ onBeforeUnmount(() => {
 .review-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: var(--font-xs); }
 .review-pct { width: 36px; text-align: right; font-weight: 600; color: var(--text-secondary); flex-shrink: 0; }
 .review-date { width: 60px; text-align: right; color: var(--text-muted); font-size: 11px; flex-shrink: 0; }
+
+/* Custom Graph Builder */
+.custom-graph-section { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px; }
+.custom-graph-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+.custom-graph-canvas { position: relative; min-height: 300px; background: var(--bg-page); border: 1px dashed var(--border); border-radius: var(--radius-md); margin-bottom: 12px; overflow: hidden; }
+.custom-node { position: absolute; background: var(--bg-card); border: 2px solid var(--primary); border-radius: 8px; padding: 8px 12px; cursor: move; font-size: 13px; font-weight: 500; }
+.custom-node-label { color: var(--text-primary); }
+.custom-node-del { position: absolute; top: -8px; right: -8px; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--red); background: var(--bg-card); color: var(--red); font-size: 10px; cursor: pointer; display: none; }
+.custom-node:hover .custom-node-del { display: block; }
+.custom-graph-hint { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); color: var(--text-muted); font-size: 14px; }
+.custom-graph-actions { display: flex; gap: 8px; align-items: center; }
 </style>
