@@ -546,3 +546,36 @@ a:hover { color: var(--primary-hover); }
     scroll-behavior: auto !important;
   }
 }
+
+/* ── Resource Search ── */
+.resource-search { max-width: 500px; margin-bottom: 20px; }
+
+/* ── Regenerate Button ── */
+.regenerate-wrap { padding: 0 20px 8px; max-width: 82%; }
+.regenerate-btn { color: #9CA3AF; font-size: 12px; }
+.regenerate-btn:hover { color: #2563EB; }
+
+/* ── Review Reminders ── */
+.review-panel { border-color: rgba(245,158,11,.2) !important; background: #FFFCF5 !important; }
+.review-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 12px; }
+.review-concept { width: 80px; flex-shrink: 0; font-weight: 500; color: #4B5563; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.review-bar-wrap { flex: 1; height: 6px; background: #F3F4F6; border-radius: 3px; overflow: hidden; }
+.review-bar { height: 100%; border-radius: 3px; transition: width .3s; }
+.review-pct { width: 36px; text-align: right; font-weight: 600; color: #6B7280; flex-shrink: 0; }
+.review-date { width: 60px; text-align: right; color: #9CA3AF; font-size: 11px; flex-shrink: 0; }
+
+/* ── Mobile Responsive ── */
+@media (max-width: 768px) {
+  .page { padding: 16px; }
+  .chat-layout { flex-direction: column; }
+  .col-left, .col-right { display: none; }
+  .col-center { width: 100%; padding: 0; }
+  .agent-stats-row { flex-wrap: wrap; gap: 6px; }
+  .resource-card-grid { grid-template-columns: 1fr; }
+  .kb-graph-wrap { min-height: 300px; }
+  .msg { max-width: 95% !important; }
+  .report-layout { flex-direction: column; }
+  .profile-grid { grid-template-columns: 1fr; }
+  .hero h1 { font-size: 20px; }
+}
+}

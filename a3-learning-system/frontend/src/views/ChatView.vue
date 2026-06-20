@@ -12,9 +12,20 @@
       <div class="drawer-inner">
         <div class="drawer-header">
           <span class="drawer-title">对话历史</span>
-          <el-button type="primary" size="small" @click="handleNewChat" :disabled="store.isStreaming">
-            <el-icon><Plus /></el-icon> 新建对话
-          </el-button>
+          <div class="drawer-actions">
+            <el-button type="primary" size="small" @click="handleNewChat" :disabled="store.isStreaming">
+              <el-icon><Plus /></el-icon> 新建对话
+            </el-button>
+            <el-button
+              type="danger"
+              size="small"
+              plain
+              @click="clearAllHistory"
+              :disabled="store.isStreaming || groupedHistory.length === 0"
+            >
+              <el-icon><Delete /></el-icon> 清空全部
+            </el-button>
+          </div>
         </div>
 
         <div v-if="historyLoading" class="sb-state">
@@ -160,6 +171,12 @@
           :class="['msg-enter', { 'msg-streaming': msg.id === streamingId && store.isStreaming }]"
           :style="{ animationDelay: idx < 2 ? '0ms' : Math.min(idx * 50, 300) + 'ms' }"
         />
+        <!-- Re-generate button for last assistant message (only when not streaming) -->
+        <div v-if="msg.role === 'assistant' && idx === store.messages.length - 1 && !store.isStreaming && msg.content" class="regenerate-wrap">
+          <el-button text size="small" class="regenerate-btn" @click="regenerate(msg, idx)">
+            <el-icon :size="14"><Refresh /></el-icon> 重新生成
+          </el-button>
+        </div>
       </template>
 
       <!-- 回到底部按钮 -->
@@ -276,7 +293,11 @@ function groupMessages(items: HistoryItem[]): ConvoGroup[] {
     const assistant = items[i + 1]
     const asstMsg = assistant && assistant.role === 'assistant' ? assistant.content : ''
     const asstAgent = assistant && assistant.role === 'assistant' ? assistant.agent_type : null
-    const preview = user.content.length > 40 ? user.content.slice(0, 40) + '...' : user.content
+    // Clean title: strip common prefixes for better readability
+    let title = user.content.replace(/^(教我|解释|什么是|帮我|给我|我想学|我要学|写一个|写一段|生成|请|麻烦|帮我|给我讲|讲一下)/, '').trim()
+    if (title.length > 30) title = title.slice(0, 30) + '...'
+    if (!title) title = user.content.slice(0, 30)
+    const preview = title
     const dateLabel = dayjs(user.created_at).format('MM-DD HH:mm')
     groups.push({
       id: user.id,
@@ -335,6 +356,28 @@ async function deleteConversation(convo: ConvoGroup) {
   }
 }
 
+async function clearAllHistory() {
+  try {
+    await ElMessageBox.confirm('确定清空全部对话历史吗？此操作不可恢复。', '清空全部对话', {
+      confirmButtonText: '清空',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch { return }
+  try {
+    // DELETE /api/chat/history → 清空当前用户所有对话历史
+    const res = await api.delete<{ deleted: number }>('/chat/history')
+    store.clearMessages()
+    activeConvoId.value = null
+    streamingId.value = ''
+    historyItems.value = []
+    groupedHistory.value = []
+    ElMessage.success(`已清空 ${res.data?.deleted ?? 0} 条对话记录`)
+  } catch {
+    ElMessage.error('清空失败，请稍后重试')
+  }
+}
+
 function agentColor(agentType: string | null): string {
   const map: Record<string, string> = {
     profile_agent: '#8B5CF6',
@@ -370,6 +413,21 @@ function handleNewChat() {
 
 function quickAsk(text: string) {
   handleSend(text)
+}
+
+// Re-generate: remove last AI reply and re-send the user message that triggered it
+function regenerate(_aiMsg: any, idx: number) {
+  // Find the user message before this AI reply
+  const msgs = store.messages
+  let userMsg = ''
+  for (let i = idx - 1; i >= 0; i--) {
+    if (msgs[i].role === 'user') { userMsg = msgs[i].content; break }
+  }
+  if (!userMsg) return
+  // Remove the AI reply
+  store.messages.splice(idx, 1)
+  // Re-send
+  handleSend(userMsg)
 }
 
 // ── 图片类型（与 ChatInput ImageItem 对齐）──
@@ -554,6 +612,11 @@ onMounted(() => {
   font-size: 16px;
   font-weight: 700;
   color: var(--text-primary);
+}
+.drawer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .new-chat-btn {
   border-radius: var(--radius-md) !important;
