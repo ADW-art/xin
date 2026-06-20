@@ -240,8 +240,19 @@ def _post_agent_event_hook(agent_name: str, user_id: int, agent_outputs: dict):
                     "priority": "high",
                 })
 
-        # ── 事件3: Resource Agent 教学完成 → 推练习 ──
+        # ── 事件3: Resource Agent 教学完成 → 推练习 + 记录复习 ──
         elif agent_name == "resource_agent":
+            # 记录到艾宾浩斯复习调度器（教学完一个知识点 = 首次复习节点）
+            try:
+                r_meta = agent_outputs.get("resource_agent", {})
+                taught_topic = r_meta.get("title") or r_meta.get("topic", "")
+                if taught_topic:
+                    from app.services.review_scheduler import get_scheduler
+                    sched = get_scheduler(user_id)
+                    sched.record_review(taught_topic)
+                    logger.info("闭环事件: resource→review_scheduler 已记录复习节点 '%s'", taught_topic)
+            except Exception:
+                pass  # 复习记录非关键路径
             _store_suggestion(user_id, "question", {
                 "reason": "教学完成后推荐练习巩固",
                 "priority": "medium",
