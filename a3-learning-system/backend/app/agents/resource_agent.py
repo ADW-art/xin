@@ -36,8 +36,16 @@ RESOURCE_PROMPT = """你是一个个性化学习资源生成专家，风格对�
 2. **不写"XXX很有用"** — 必须说出具体在哪里用、怎么用、什么时候不该用
 3. **不写"顾名思义"** — 不要把读者当傻子，用代码和例子说清楚
 4. **不写"试着自己练习"** — 给具体题目描述、输入输出要求、难度标签
-5. **不跳过运行结果** — 每个代码块后面必须紧接一个 ``` 展示实际输出
+5. **不跳过运行结果** — 每个代码块后面必须紧接一个独立的 ``` 代码块展示实际输出
 6. **全文至少3个代码块** — 少于3个即为不合格，每个至少有运行结果
+7. **禁止在代码行内写 # 输出：注释猜测运行结果** — 这是最严重的错误
+   - 错误示范：`print(fruits)  # 输出：['apple', 'banana']` ← 这行注释99%是错的！
+   - 错误示范：`print(x)  # 输出：42` ← 不要猜输出！用独立代码块展示！
+   - 正确做法：代码块只写代码（不写输出注释），之后用独立 ``` 代码块展示真实输出
+   - 原因：你无法知道代码在真实环境中的确切输出，猜错会误导学生
+8. **不要给代码行加行尾注释猜测返回值** — `x.pop()  # 返回'banana'` 这种全是错的
+   - 如果想说明返回值，用独立文本段落说明，不要放在代码行尾
+9. **每个代码块后必须紧跟运行结果** — 用独立 ``` 块展示，不要用注释猜
 
 ## 学生画像
 {profile_text}
@@ -106,24 +114,32 @@ RESOURCE_PROMPT = """你是一个个性化学习资源生成专家，风格对�
 
 ## 回复格式
 - 返回纯 Markdown，不要套 ```markdown 外壳
-- 正文结束后，用 > 引用格式加一句自然的追问引导，只加一句：
-  - 教完概念后：「这个概念清楚了吗？要不要我出两道题帮你巩固一下？」
-  - 生成代码后：「代码可以直接跑，需要我逐行讲解关键部分吗？」
-  - 完成教程后：「接下来想学 XX 的进阶用法，还是换一个主题？」
+- 正文结束后，**必须**用 > 引用格式加一句自然的追问引导（必须包含「下一步」或「继续」）：
+  - 教完概念后：「> 这个概念清楚了吗？下一步要不要我出两道题帮你巩固一下？」
+  - 生成代码后：「> 代码可以直接跑。接下来想继续学 XX 的进阶用法，还是换一个主题？」
+  - 完成教程后：「> 学得不错！建议继续学习 [具体知识点]，需要我接着讲吗？」
+  - **禁止不写引导语就结束回复**
 
 ---
 
 ## ⚠️ 强制检查清单（你的回复必须包含以下每一项，缺一不可）
-- [ ] ### 概述（精准定义，禁止维基百科式表述）
-- [ ] ### 核心概念（至少2个，每个配代码块+运行结果）
-- [ ] ### 代码实战（完整综合示例，注释说明设计决策）
-- [ ] ### 常见陷阱（至少2个，错误示例→为什么错→正确做法）
-- [ ] ### 练习（至少2道具体题目，有难度标注和知识点列表）
-- [ ] ### 下一步（推荐1个具体知识点+原因）
-- [ ] 至少3个 ```语言 代码块
-- [ ] 每个代码块紧接运行结果
 
-如果你遗漏任何一个部分，这个回复就是不合格的。"""
+**绝对禁止的做法（这些是不合格的输出）**：
+- 只给代码不给练习 → 不合格
+- 只讲概念不给陷阱 → 不合格
+- 练完不给下一步推荐 → 不合格
+- 代码没有运行结果 → 不合格
+
+**强制包含清单**：
+1. ### 概述 — 精准定义（1-2句话），说明解决什么问题
+2. ### 核心概念 — 至少2个子概念，每个配代码块+运行结果
+3. ### 代码实战 — 完整综合示例，关键行注释解释设计决策
+4. ### 常见陷阱 — 至少2个：错误示例 → 为什么错 → 正确写法
+5. ### 练习 — 至少2道具体题目，标注难度和考察知识点
+6. ### 下一步 — 推荐1个具体下一步知识点+原因
+
+每个部分都必须使用 ### 标题，代码块使用 ```语言 标记。
+**少任何一部分，这份输出就是废品。**"""
 
 TYPE_GUIDES = {
     "document": """生成一份完整的教程文档，必须严格包含以下6个部分：
@@ -436,6 +452,10 @@ def resource_agent_node(state: AgentState, spark: SparkClient) -> dict:
     else:
         difficulty_rule = "学生画像中无知识基础数据，按入门水平讲解：每个概念从基础讲起，代码注释详尽，多用类比辅助理解。"
 
+    # 画像引导注入 — 新用户首次使用时收集画像
+    from app.core.shared_utils import _build_profile_guide
+    profile_guide = _build_profile_guide(profile)
+
     # 构建系统提示词（含画像+RAG上下文）
     resource_system = RESOURCE_PROMPT.format(
         profile_text=profile_text,
@@ -447,32 +467,49 @@ def resource_agent_node(state: AgentState, spark: SparkClient) -> dict:
         difficulty_rule=difficulty_rule,
     )
 
+    # 画像引导注入
+    if profile_guide:
+        resource_system += profile_guide
+
     # 教学流程提示注入：告知 LLM 当前教学进度并引导下一节点
     if is_teaching:
         tc = teaching_context
         current_idx = tc.get("current_index", 0)
         total_nodes = len(tc.get("active_path", []))
         current_node = tc.get("active_path", [topic])[current_idx] if tc.get("active_path") else topic
+        completed = tc.get("completed_nodes", [])
+
+        # 判断阶段边界
+        is_stage_boundary = (current_idx > 0 and (current_idx + 1) % 3 == 0)
+        is_last = (current_idx + 1 >= total_nodes)
+
         resource_system += (
-            f"\n\n## 教学流程上下文（系统指令，不要原样输出）\n"
-            f"你正在按照知识图谱教学路径授课，当前是第 {current_idx + 1}/{total_nodes} 个节点。\n"
-            f"当前教学节点：「{current_node}」\n"
+            f"\n\n## 教学流程上下文（系统内部指令，绝对不要原样输出到正文）\n"
+            f"你正在按知识图谱教学路径授课。\n"
+            f"- 当前进度：第 {current_idx + 1}/{total_nodes} 个节点：「{current_node}」\n"
+            f"- 已学完：{', '.join(completed[-5:]) if completed else '(这是第一个节点)'}\n"
         )
         if teaching_next_node:
+            resource_system += f"- 下一个将学：「{teaching_next_node}」\n"
+
+        if is_last:
             resource_system += (
-                f"下一节点：「{teaching_next_node}」\n"
-                f"教学完成后，请在「下一步」中明确引导用户继续下一节点。"
-                f"引导文案示例：「> 学得不错！接下来要学的是「{teaching_next_node}」，要继续吗？」\n"
-                f"注意：用 > 引用格式引导，只加1句，不要添加其他追问。"
+                "\n**这是最后一个节点**。教完后在「下一步」中祝贺用户完成路径，"
+                "用 > 引用格式推荐：做评估测试 / 学新主题 / 复习薄弱点。"
+            )
+        elif is_stage_boundary:
+            resource_system += (
+                f"\n**这是第 {(current_idx + 1) // 3} 阶段的最后一个节点**。"
+                "教完后在「下一步」中总结本阶段收获，"
+                "用 > 引用格式给出选项：「> 接下来可以：[继续学{teaching_next_node}] [做练习题] [复习本阶段]」"
+                "注意：用 [] 括起选项（前端会渲染为按钮），最多给3个选项。"
             )
         else:
             resource_system += (
-                "这是最后一个节点。教学完成后，请祝贺用户完成学习路径，并推荐做一次评估测试。"
+                "\n**阶段内教学**（系统会自动推进，不需要用户说继续）。"
+                "教完后在「下一步」中自然地引出下一节点，"
+                f"用 > 引用格式：「> 接下来要学的是「{teaching_next_node}」，准备好了就继续~」"
             )
-        resource_system += (
-            f"\n已完成节点（{len(tc.get('completed_nodes', []))}/{total_nodes - 1}）："
-            f"{', '.join(tc.get('completed_nodes', [])[-5:]) or '(尚无)'}"
-        )
 
     # 携带对话历史上下文，确保多轮对话中代词语义连贯、约束条件跨轮传递
     from app.core.shared_utils import _build_llm_messages
@@ -482,7 +519,7 @@ def resource_agent_node(state: AgentState, spark: SparkClient) -> dict:
         resource_system,
         all_msgs,
         last_user_msg,
-        max_history=6,
+        max_history=12,
         topic_context=topic_ctx,
     )
 
@@ -496,7 +533,7 @@ def resource_agent_node(state: AgentState, spark: SparkClient) -> dict:
         "stream_pending": {
             "messages": messages,
             "temperature": 0.7,
-            "max_tokens": 2048,
+            "max_tokens": 4096,
             "use_safe": True,
             "chunk_size": 2,
         },

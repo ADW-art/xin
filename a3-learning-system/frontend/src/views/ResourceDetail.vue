@@ -95,6 +95,26 @@ ResourceDetail 资源详情页
         <!-- 未知类型兜底 -->
         <div v-else class="markdown-body" v-html="renderedMarkdown"/>
       </div>
+
+      <!-- 评分反馈区域 -->
+      <div class="rating-card a-fade-up">
+        <div class="rating-header">
+          <span class="rating-title">
+            <el-icon :size="16"><StarFilled v-if="currentRating" style="color: #F59E0B;"/><Star v-else/></el-icon>
+            {{ currentRating ? `已评分: ${currentRating}/5` : '评分' }}
+          </span>
+          <span class="rating-hint">为此资源打分，帮助我们改进推荐</span>
+        </div>
+        <el-rate
+          v-model="currentRating"
+          :max="5"
+          :disabled="ratingLoading"
+          :clearable="false"
+          show-score
+          score-template="{value}/5"
+          @change="handleRate"
+        />
+      </div>
     </template>
   </div>
 </template>
@@ -105,9 +125,9 @@ import { useRoute } from 'vue-router'
 import { marked } from 'marked'
 import { ElMessage } from 'element-plus'
 import DOMPurify from 'dompurify'
-import { ArrowLeft, Loading, Document, Connection, DocumentCopy, EditPen, VideoCamera, Cpu, Clock, CollectionTag } from '@element-plus/icons-vue'
+import { ArrowLeft, Loading, Document, Connection, DocumentCopy, EditPen, VideoCamera, Cpu, Clock, CollectionTag, Star, StarFilled } from '@element-plus/icons-vue'
 import MindMap from '@/components/resource/MindMap.vue'
-import { getResource, type ResourceDetail as ResourceDetailType } from '@/api/resource'
+import { getResource, submitFeedback, type ResourceDetail as ResourceDetailType } from '@/api/resource'
 
 const route = useRoute()
 
@@ -116,6 +136,8 @@ const loading = ref(true)
 const error = ref('')
 const resource = ref<ResourceDetailType | null>(null)
 const copyLabel = ref('复制代码')
+const ratingLoading = ref(false)
+const currentRating = ref<number | null>(null)  // displayed rating — starts from resource.feedback_score
 
 // ── 类型映射 ──
 const typeMap: Record<string, { label: string; icon: Component; bg: string; color: string; border: string }> = {
@@ -173,6 +195,20 @@ async function copyCode() {
   }
 }
 
+async function handleRate(score: number) {
+  if (!resource.value || ratingLoading.value) return
+  ratingLoading.value = true
+  try {
+    const result = await submitFeedback(resource.value.id, score)
+    currentRating.value = result.feedback_score
+    ElMessage.success('评分已提交')
+  } catch {
+    ElMessage.error('评分提交失败，请稍后重试')
+  } finally {
+    ratingLoading.value = false
+  }
+}
+
 // ── 加载资源详情 ──
 onMounted(async () => {
   const id = Number(route.params.id)
@@ -187,6 +223,7 @@ onMounted(async () => {
       error.value = '资源未找到'
     } else {
       resource.value = detail
+      currentRating.value = detail.feedback_score ?? null
     }
   } catch (err: unknown) {
     const e = err as { response?: { status?: number } }
@@ -294,4 +331,35 @@ onMounted(async () => {
 
 .code-block { background: #1E293B; color: #E2E8F0; padding: 20px 22px; margin: 0; overflow-x: auto; font-size: var(--font-sm); line-height: 1.7; font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace; white-space: pre; tab-size: 4; border-radius: 0 0 var(--radius-md) var(--radius-md) }
 .code-block code { font-family: inherit }
+
+/* ── 评分卡片 ── */
+.rating-card {
+  margin-top: 20px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px 26px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.rating-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.rating-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.rating-hint {
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+}
 </style>

@@ -51,3 +51,21 @@ export async function getResource(id: number): Promise<ResourceDetail> {
   const response = await api.get<ResourceDetail>(`/resources/${id}`)
   return response.data
 }
+
+// 反馈请求结构
+export interface FeedbackRequest {
+  score: number   // 1-5 评分
+}
+
+// 反馈响应结构
+export interface FeedbackResponse {
+  id: number
+  feedback_score: number
+  message: string
+}
+
+// 提交资源评分 (1-5 星)
+export async function submitFeedback(id: number, score: number): Promise<FeedbackResponse> {
+  const response = await api.post<FeedbackResponse>(`/resources/${id}/feedback`, { score })
+  return response.data
+}

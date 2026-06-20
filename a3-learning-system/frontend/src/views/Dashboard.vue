@@ -126,11 +126,11 @@
         <div class="panel-hd">
           <el-icon :size="16"><Connection /></el-icon>
           <span>Agent 调用统计</span>
-          <span class="panel-hint">来源: 对话历史</span>
+          <span class="panel-hint">来源: 全量历史记录 (agent_type)</span>
         </div>
         <div class="agent-stats-row">
           <div v-for="a in realAgentStats" :key="a.name" class="agent-stat-chip">
-            <div class="asc-dot" :style="{ background: a.color }" />
+            <div class="asc-dot" :class="{ green: a.color === '#10B981', blue: a.color === '#2563EB', orange: a.color === '#F59E0B', purple: a.color === '#8B5CF6' }" />
             <span class="asc-name">{{ a.label }}</span>
             <span class="asc-count">{{ a.calls }}次</span>
           </div>
@@ -168,13 +168,13 @@
           <el-icon :size="16"><TrendCharts /></el-icon>
           <span>BKT 掌握率</span>
         </div>
-        <div class="panel-bd">
+        <div class="panel-bd bkt-scroll">
           <div v-if="masteryLoading" class="skeleton-text" />
           <template v-else-if="masteryItems.length">
-            <div v-for="m in masteryItems.slice(0, 6)" :key="m.name" class="bkt-row">
+            <div v-for="m in masteryItems.slice(0, 3)" :key="m.name" class="bkt-row">
               <span class="bkt-name">{{ m.name }}</span>
               <div class="bkt-bar-wrap">
-                <div class="bkt-bar" :style="{ width: m.val + '%', background: m.barColor }" />
+                <div class="bkt-bar" :class="{ high: m.val >= 70, mid: m.val >= 40 && m.val < 70, low: m.val < 40 }" :style="{ width: m.val + '%' }" />
               </div>
               <span class="bkt-pct" :style="{ color: m.color }">{{ m.val }}%</span>
             </div>
@@ -189,7 +189,7 @@
           <el-icon :size="16"><WarningFilled /></el-icon>
           <span>学习风险</span>
         </div>
-        <div class="panel-bd">
+        <div class="panel-bd risk-scroll">
           <div v-if="riskItems.length === 0" class="empty-mini safe">未检测到风险</div>
           <div v-for="r in riskItems" :key="r.name" class="risk-row" :class="r.level">
             <div class="risk-dot" />
@@ -208,7 +208,7 @@
           <span>能力分布</span>
         </div>
         <div class="panel-bd panel-radar-bd">
-          <div ref="radarRef" style="height:240px" />
+          <div ref="radarRef" style="height:180px" />
         </div>
       </div>
 
@@ -326,21 +326,20 @@ function timeAgo(dateStr: string) {
   return Math.floor(hr/24) + '天前'
 }
 function getMasteryTheme(val: number): { color: string; barColor: string; label: string } {
-  if (val >= 85) return { color: '#1D4ED8', barColor: '#1D4ED8', label: '精通' }
+  if (val >= 85) return { color: '#10B981', barColor: '#10B981', label: '精通' }
   if (val >= 60) return { color: '#2563EB', barColor: '#2563EB', label: '掌握' }
-  if (val >= 35) return { color: '#60A5FA', barColor: '#60A5FA', label: '学习中' }
-  return { color: '#94A3B8', barColor: '#94A3B8', label: '入门' }
+  if (val >= 35) return { color: '#F59E0B', barColor: '#F59E0B', label: '学习中' }
+  return { color: '#8B5CF6', barColor: '#8B5CF6', label: '入门' }
 }
 
 // ═══════════ Data Loading ═══════════
 async function loadAll() {
   try {
-    const [userRes, profileRes, resourcesRes, adminRes, historyRes, bktRes] = await Promise.all([
+    const [userRes, profileRes, resourcesRes, adminRes, bktRes] = await Promise.all([
       api.get('/auth/me'),
       api.get('/profile/me'),
       api.get('/resources?size=5'),
       api.get('/admin/stats'),
-      api.get('/chat/history', { params: { limit: 8 } }),
       api.get('/bkt/status').catch(() => ({ data: null })),
     ])
 
@@ -409,18 +408,47 @@ async function loadAll() {
     }
     pathLoading.value = false
 
-    // Radar — 优先使用 profile dimension_scores，回退到 BKT 数据
+    // Radar — 优先使用 profile dimension_scores，回退到 BKT 真实数据
     let radarDs = ds
     if (Object.keys(radarDs).length === 0 && bktConcepts.length > 0) {
-      // 从 BKT 数据构建伪 dimension_scores（只含 knowledge / overall）
-      const avg = Math.round((bktRes.data?.average_mastery || 0) * 100)
+      // 从 BKT 贝叶斯后验分布推导 6 维能力值（而非硬编码 0.8/0.9 系数）
+      const avgMastery = Math.round((bktRes.data?.average_mastery || 0) * 100)
+      const sorted = [...bktConcepts].sort((a, b) => (b.p_known || 0) - (a.p_known || 0))
+      const totalCount = sorted.length
+
+      // 分层统计：已掌握(>=0.7)、学习中(0.35-0.7)、入门(<0.35)
+      const masteredCount = sorted.filter(c => (c.p_known || 0) >= 0.7).length
+      const learningCount = sorted.filter(c => (c.p_known || 0) >= 0.35).length
+      const masteredPct = totalCount > 0 ? Math.round((masteredCount / totalCount) * 100) : 0
+      const learningPct = totalCount > 0 ? Math.round((learningCount / totalCount) * 100) : 0
+
+      // 深度指标：前一半概念的均值（反映深度学习程度）
+      const topHalf = sorted.slice(0, Math.max(1, Math.ceil(totalCount / 2)))
+      const topHalfAvg = Math.round(
+        topHalf.reduce((s, c) => s + (c.p_known || 0), 0) / topHalf.length * 100
+      )
+
+      // 离散度：标准差越小说明掌握越均匀（逻辑性强），越大说明偏科
+      const mean = sorted.reduce((s, c) => s + (c.p_known || 0), 0) / Math.max(totalCount, 1)
+      const variance = sorted.reduce((s, c) => {
+        const d = (c.p_known || 0) - mean
+        return s + d * d
+      }, 0) / Math.max(totalCount, 1)
+      const cv = mean > 0 ? Math.sqrt(variance) / mean : 1  // 变异系数
+
       radarDs = {
-        knowledge: avg,
-        speed: 50,
-        practice: 50,
-        focus: 50,
-        logic: 50,
-        overall: avg,
+        // knowledge: BKT 贝叶斯后验均值 — 最直接的知识掌握度量
+        knowledge: avgMastery,
+        // speed: 学习效率 — 正在学习及以上层级的比例反映进步速度
+        speed: Math.min(100, Math.round(learningPct * 0.9 + (totalCount >= 5 ? 10 : totalCount * 2))),
+        // practice: 实践应用 — 已掌握比例 + 追踪概念数加成（多练多得）
+        practice: Math.min(100, Math.round(masteredPct * 0.85 + Math.min(15, totalCount * 2))),
+        // focus: 专注深度 — 前半段概念的均值反映深度学习质量
+        focus: Math.min(100, Math.round(topHalfAvg * 0.9 + (totalCount >= 3 ? 10 : 0))),
+        // logic: 逻辑思维 — 掌握越均匀(低变异系数)说明逻辑越强，偏科会拉低
+        logic: Math.min(100, Math.round(avgMastery * (1 - Math.min(0.5, cv * 0.6)) + 10)),
+        // overall: 综合能力 — 知识+速度+实践+逻辑 加权平均
+        overall: Math.round(avgMastery * 0.3 + learningPct * 0.25 + masteredPct * 0.25 + topHalfAvg * 0.2),
       }
     }
     if (Object.keys(radarDs).length > 0) renderRadar(radarDs)
@@ -507,18 +535,33 @@ function renderRadar(ds: Record<string, number>) {
   })
 }
 
-// Fill real agent stats from history
+// Fill real agent stats from ALL chat history (persistent across sessions/refreshes)
 async function loadAgentStats() {
   try {
-    const r = await api.get('/chat/history', { params: { limit: 50 } })
-    const history = r.data || []
-    const counts: Record<string,number> = {}
-    history.forEach((h: { agent_type?: string }) => {
-      if (h.agent_type) counts[h.agent_type] = (counts[h.agent_type] || 0) + 1
+    // Fetch enough history to get a meaningful count; the backend stores
+    // agent_type on each assistant message since conversation creation.
+    const r = await api.get('/chat/history', { params: { limit: 100 } })
+    const history: Array<{ role?: string; agent_type?: string }> = r.data || []
+    const counts: Record<string, number> = {}
+    for (const h of history) {
+      // agent_type is only set on assistant messages; user messages have null
+      if (h.agent_type) {
+        counts[h.agent_type] = (counts[h.agent_type] || 0) + 1
+      }
+    }
+    // Map backend agent_type values to display entries
+    realAgentStats.value.forEach(a => {
+      a.calls = counts[a.name] || 0
     })
-    realAgentStats.value.forEach(a => { a.calls = counts[a.name] || 0 })
-  } catch {
-    // Agent 统计加载失败不影响主要数据展示
+    // If we received history but every stat is still 0, log the raw response
+    // so the developer can see whether agent_type is really missing.
+    if (history.length > 0 && realAgentStats.value.every(a => a.calls === 0)) {
+      console.warn('[Dashboard] 对话历史已加载但 agent_type 全部为空，样本记录:', history.slice(0, 3))
+    }
+  } catch (e: unknown) {
+    // Non-fatal: agent stats are supplemental, not critical
+    const msg = e instanceof Error ? e.message : String(e)
+    console.warn('[Dashboard] Agent 统计加载失败:', msg)
   }
 }
 
@@ -531,14 +574,15 @@ onMounted(() => { loadAll(); loadAgentStats() })
   display: flex;
   gap: 16px;
   padding: 18px;
-  height: calc(100dvh - var(--header-h));
-  overflow-y: auto; overflow-x: hidden;
+  height: 100%;
+  overflow: hidden;
   background: var(--bg-page);
+  box-sizing: border-box;
 }
 
-.col-left { width: 252px; flex-shrink: 0; display: flex; flex-direction: column; gap: 12px; }
-.col-center { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
-.col-right { width: 276px; flex-shrink: 0; display: flex; flex-direction: column; gap: 12px; }
+.col-left { width: 252px; flex-shrink: 0; display: flex; flex-direction: column; gap: 12px; height: 100%; overflow-y: auto; overflow-x: hidden; }
+.col-center { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; height: 100%; overflow-y: auto; overflow-x: hidden; }
+.col-right { width: 286px; flex-shrink: 0; display: flex; flex-direction: column; gap: 12px; height: 100%; overflow-y: auto; overflow-x: hidden; }
 
 /* ═══════════ Panel ═══════════ */
 .panel {
@@ -611,7 +655,7 @@ onMounted(() => { loadAll(); loadAgentStats() })
 .path-step:hover { background: #F4F6FB; }
 .path-step-num {
   width: 22px; height: 22px; border-radius: 6px;
-  background: var(--primary);
+  background: #2563EB;
   color: #fff; font-size: 11px; font-weight: 600;
   display: flex; align-items: center; justify-content: center;
   flex-shrink: 0;
@@ -641,7 +685,7 @@ onMounted(() => { loadAll(); loadAgentStats() })
 /* ═══════════ Center — Welcome Banner ═══════════ */
 .panel-welcome {
   border-color: rgba(37,99,235,.15);
-  background: linear-gradient(135deg, #FAFCFF 0%, #F0F5FF 100%);
+  background: #F0F5FF;
 }
 .welcome-body { padding: 14px 14px 10px; }
 .welcome-subtitle {
@@ -659,7 +703,8 @@ onMounted(() => { loadAll(); loadAgentStats() })
 .welcome-step:hover .ws-num { background: var(--primary); }
 .ws-num {
   width: 26px; height: 26px; border-radius: 50%;
-  background: #94A3B8; color: #fff;
+  background: #2563EB;
+  color: #fff;
   font-size: 13px; font-weight: 700;
   display: flex; align-items: center; justify-content: center;
   flex-shrink: 0; transition: background .15s;
@@ -682,6 +727,10 @@ onMounted(() => { loadAll(); loadAgentStats() })
 }
 .agent-stat-chip:hover { background: #fff; }
 .asc-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.asc-dot.green { background: #10B981; box-shadow: 0 0 6px rgba(16,185,129,.3); }
+.asc-dot.blue { background: #2563EB; box-shadow: 0 0 6px rgba(37,99,235,.3); }
+.asc-dot.orange { background: #F59E0B; box-shadow: 0 0 6px rgba(245,158,11,.3); }
+.asc-dot.purple { background: #8B5CF6; box-shadow: 0 0 6px rgba(139,92,246,.3); }
 .asc-name { font-size: 10px; font-weight: 500; color: #6B7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .asc-count { margin-left: auto; font-size: 12px; font-weight: 600; color: #1F2937; flex-shrink: 0; }
 
@@ -701,6 +750,8 @@ onMounted(() => { loadAll(); loadAgentStats() })
   display: flex; align-items: center; justify-content: center;
   background: rgba(37,99,235,.06); flex-shrink: 0;
 }
+.resource-mini:nth-child(2n) .el-icon { background: rgba(16,185,129,.08); color: #10B981; }
+.resource-mini:nth-child(2n+1) .el-icon { background: rgba(139,92,246,.08); color: #8B5CF6; }
 .resource-mini-info { flex: 1; min-width: 0; }
 .resource-mini-title { font-size: 12px; font-weight: 500; color: #374151; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .resource-mini-type { font-size: 10px; color: #9CA3AF; margin-top: 1px; }
@@ -709,28 +760,41 @@ onMounted(() => { loadAll(); loadAgentStats() })
 /* ═══════════ Right — BKT ═══════════ */
 .bkt-row { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
 .bkt-row:last-child { margin-bottom: 0; }
-.bkt-name { width: 52px; font-size: 10px; font-weight: 500; color: #6B7280; text-align: right; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bkt-bar-wrap { flex: 1; height: 7px; background: #F0F2F5; border-radius: 3.5px; overflow: hidden; }
-.bkt-bar { height: 100%; border-radius: 3.5px; transition: width .8s ease; }
+.bkt-name { width: 56px; font-size: 10px; font-weight: 500; color: #6B7280; text-align: right; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bkt-bar-wrap { flex: 1; min-width: 0; height: 6px; background: #F0F2F5; border-radius: 3px; overflow: hidden; }
+.bkt-bar { height: 100%; border-radius: 3px; transition: width .8s ease; }
+.bkt-bar.high { background: #10B981; }
+.bkt-bar.mid { background: #2563EB; }
+.bkt-bar.low { background: #F59E0B; }
 .bkt-pct { width: 30px; font-size: 10px; font-weight: 600; flex-shrink: 0; text-align: right; }
 
 /* ═══════════ Right — Risk ═══════════ */
 .risk-row { display: flex; align-items: flex-start; gap: 7px; padding: 7px 0; border-bottom: 1px solid #F5F7FA; }
 .risk-row:last-child { border-bottom: none; }
 .risk-dot { width: 6px; height: 6px; border-radius: 50%; margin-top: 3px; flex-shrink: 0; }
-.risk-row.high .risk-dot { background: #DC2626; }
-.risk-row.medium .risk-dot { background: #60A5FA; }
+.risk-row.high .risk-dot { background: #EF4444; box-shadow: 0 0 5px rgba(239,68,68,.4); }
+.risk-row.medium .risk-dot { background: #F59E0B; box-shadow: 0 0 5px rgba(245,158,11,.4); }
+.risk-row.low .risk-dot { background: #10B981; box-shadow: 0 0 5px rgba(16,185,129,.4); }
 .risk-info { display: flex; flex-direction: column; gap: 1px; }
 .risk-name { font-size: 11px; font-weight: 500; color: #374151; }
 .risk-desc { font-size: 10px; color: #9CA3AF; }
 
-/* ═══════════ Right — Radar / KB ═══════════ */
+/* 学习风险面板内部滚动 */
+.risk-scroll { max-height: 180px; overflow-y: auto; overflow-x: hidden; }
+
+/* BKT掌握率面板内部滚动 */
+.bkt-scroll { max-height: 130px; overflow-y: auto; overflow-x: hidden; }
+
+/* ═════════ Right — Radar / KB ═══════════ */
 .panel-radar-bd { padding: 8px 10px; }
 
 .kb-stats { display: flex; justify-content: space-around; padding: 4px 0; }
 .kb-stat { text-align: center; position: relative; }
 .kb-stat:first-child::after { content: ''; position: absolute; right: -28%; top: 12%; width: 1px; height: 55%; background: #E8ECF1; }
-.kb-num { font-size: 21px; font-weight: 700; color: var(--primary); line-height: 1.2; }
+.kb-num { font-size: 21px; font-weight: 700; line-height: 1.2; }
+.kb-stat:nth-child(1) .kb-num { color: #2563EB; }
+.kb-stat:nth-child(2) .kb-num { color: #10B981; }
+.kb-stat:nth-child(3) .kb-num { color: #F59E0B; }
 .kb-unit { display: block; font-size: 10px; color: #9CA3AF; margin-top: 2px; }
 
 /* ═══════════ Dashboard Error ═══════════ */

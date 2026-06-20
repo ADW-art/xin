@@ -179,6 +179,12 @@ def evaluation_agent_node(state: AgentState, spark: SparkClient) -> dict:
 
     eval_system = EVALUATION_PROMPT.format(profile_summary=profile_summary)
 
+    # 画像引导注入 — 新用户首次使用时收集画像
+    from app.core.shared_utils import _build_profile_guide
+    profile_guide = _build_profile_guide(profile)
+    if profile_guide:
+        eval_system += profile_guide
+
     # 携带对话历史上下文，确保评估报告聚焦用户当前的学科领域和编程语言
     from app.core.shared_utils import _build_llm_messages
     all_msgs = state.get("messages", [])
@@ -188,13 +194,13 @@ def evaluation_agent_node(state: AgentState, spark: SparkClient) -> dict:
         eval_system,
         all_msgs,
         last_user_msg,
-        max_history=6,
+        max_history=12,
         topic_context=topic_ctx,
     )
 
     # Token 截断：防止画像数据过大导致 API 超限
     from app.utils.llm_helper import truncate_messages
-    messages = truncate_messages(messages, max_tokens=3000)
+    messages = truncate_messages(messages, max_tokens=6000)
 
     logger.info("EvaluationAgent: 准备流式生成评估报告 dim_scores=%s", real_dimension_scores)
 
@@ -204,7 +210,7 @@ def evaluation_agent_node(state: AgentState, spark: SparkClient) -> dict:
         "agent_outputs": {
             **state.get("agent_outputs", {}),
             "evaluation_agent": {
-                "stream_pending": {"messages": messages, "temperature": 0.6, "max_tokens": 2048},
+                "stream_pending": {"messages": messages, "temperature": 0.6, "max_tokens": 4096},
                 "dimension_scores": real_dimension_scores,
             },
         },

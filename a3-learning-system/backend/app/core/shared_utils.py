@@ -153,6 +153,85 @@ def _structure_knowledge_base(raw_text: str) -> dict:
 
 
 # ============================================================
+# 画像状态分析 — supervisor 和 chat_agent 共用
+# ============================================================
+
+def _get_profile_status(profile: dict | None) -> tuple[list[str], list[str]]:
+    """分析画像填写状态，返回 (已填维度列表, 未填维度列表)
+
+    改进版：正确处理空 dict (knowledge_base={})、零值、空字符串等边界情况。
+    供 supervisor、chat_agent 等模块共享使用。
+    """
+    ALL_DIMS = ["knowledge_base", "cognitive_style", "learning_goal",
+                "weekly_hours", "preferred_resource_type", "error_patterns"]
+    DIM_LABELS = {
+        "knowledge_base": "知识基础", "cognitive_style": "认知风格",
+        "learning_goal": "学习目标", "weekly_hours": "每周时间",
+        "preferred_resource_type": "偏好资源", "error_patterns": "易错模式",
+    }
+    profile = profile or {}
+
+    def _is_filled(val) -> bool:
+        if val is None:
+            return False
+        if isinstance(val, str) and val.strip() == "":
+            return False
+        if isinstance(val, dict) and len(val) == 0:
+            return False
+        if isinstance(val, (int, float)) and val == 0:
+            return False
+        return True
+
+    filled = [DIM_LABELS[k] for k in ALL_DIMS if k in profile and _is_filled(profile[k])]
+    empty = [DIM_LABELS[k] for k in ALL_DIMS if k not in profile or not _is_filled(profile.get(k))]
+    return filled, empty
+
+
+# ============================================================
+# 画像引导注入 — 所有 Agent 共享，确保新用户首次使用时收集画像
+# ============================================================
+
+def _build_profile_guide(profile: dict | None) -> str:
+    """为 Agent 的 system prompt 构建画像引导块
+
+    所有 Agent (resource/question/path/evaluation/chat) 在生成回复时
+    都应注入此引导，确保新用户的画像在对话中逐步完善。
+
+    Returns:
+        画像引导字符串，如果画像已完整则返回空字符串
+    """
+    ALL_DIMS = ["knowledge_base", "cognitive_style", "learning_goal",
+                "weekly_hours", "preferred_resource_type"]
+    DIM_LABELS = {"knowledge_base": "知识基础", "cognitive_style": "认知风格",
+                  "learning_goal": "学习目标", "weekly_hours": "每周时间",
+                  "preferred_resource_type": "偏好资源"}
+    profile = profile or {}
+    empty = [DIM_LABELS[k] for k in ALL_DIMS
+             if k not in profile or profile[k] is None or profile[k] == ""]
+
+    if not empty:
+        return ""
+
+    empty_list = "、".join(empty)
+    if len(empty) >= 3:
+        # 画像很不完整 → 强引导，放在回复开头
+        return (
+            f"\n\n## 【画像采集任务 — 最高优先级】\n"
+            f"当前用户画像缺失：{empty_list}。\n"
+            f"你必须在回复的**开头**先自然地了解用户背景（只问1个缺失维度），然后再回答用户问题。\n"
+            f"示例回复结构：「[简短回答用户问题] 对了，想先了解一下——{empty[0]}是什么呢？」\n"
+            f"禁止：忽略此任务、一次问多个维度、用生硬的列表。"
+        )
+    else:
+        # 画像基本完整，缺1-2个 → 弱引导，放在回复末尾
+        return (
+            f"\n\n## 【画像补充任务】\n"
+            f"当前用户画像还缺：{empty_list}。\n"
+            f"在你的回复末尾，自然地带出一句追问了解缺失信息。只问1个维度，像朋友聊天一样。"
+        )
+
+
+# ============================================================
 # 从 chat.py 提取 — Supervisor 也使用
 # ============================================================
 

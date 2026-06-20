@@ -55,8 +55,8 @@
               </div>
               <div class="float-stat-divider"></div>
               <div class="float-stat-item">
-                <span class="float-num">{{ formatTokens(sessionStats.totalTokens) }}</span>
-                <span class="float-label">Token</span>
+                <span class="float-num">{{ sessionStats.totalTokens }}</span>
+                <span class="float-label">消息</span>
               </div>
               <div class="float-stat-divider"></div>
               <div class="float-stat-item">
@@ -344,92 +344,71 @@ interface AgentInfo {
 
 const agentsRegistry = reactive<Record<string, AgentInfo>>({})
 
-// Worker 节点位置（大屏弧形分布）
-const workerPositions = [
-  { x: 85, y: 190 },   // Teaching - 左侧
-  { x: 205, y: 285 },  // Knowledge - 左下
-  { x: 360, y: 325 },  // Question - 中下
-  { x: 515, y: 285 },  // Evaluation - 右下
-  { x: 635, y: 190 },  // Path - 右侧
-  { x: 360, y: 170 },  // Chat - 中上（与Supervisor保持距离）
-]
+// 动态计算 Worker 节点椭圆弧布局
+function computeArcLayout(count: number): { x: number; y: number }[] {
+  const cx = canvasWidth / 2
+  const cy = canvasHeight * 0.52
+  const rx = canvasWidth * 0.36
+  const ry = canvasHeight * 0.28
+  const positions: { x: number; y: number }[] = []
+  for (let i = 0; i < count; i++) {
+    const angle = (Math.PI * 2 * i) / count - Math.PI / 2
+    positions.push({
+      x: Math.round(cx + rx * Math.cos(angle)),
+      y: Math.round(cy + ry * Math.sin(angle)),
+    })
+  }
+  return positions
+}
 
-// 默认 Agent 配置（统一蓝白配色）
-const defaultAgentsConfig: Omit<AgentInfo, 'calls' | 'tokens' | 'totalMs' | 'avgMs' | 'isActive' | 'lastPreview'>[] = [
-  {
-    name: 'supervisor',
-    label: 'Supervisor',
-    role: '意图调度',
+// 默认 Agent 配置（/api/agent-trace/manifest 不可用时的 fallback）
+const defaultAgentsConfig: Omit<AgentInfo, 'calls' | 'tokens' | 'totalMs' | 'avgMs' | 'isActive' | 'lastPreview' | 'pos'>[] = [
+  { name: 'supervisor', label: 'Supervisor', role: '意图调度',
     description: '接收用户输入，分析意图并智能路由到最合适的专家 Agent 执行任务。负责协调多 Agent 协作流程。',
-    icon: 'Cpu',
-    category: 'supervisor',
+    icon: 'Cpu', category: 'supervisor',
     keywords: ['意图识别', '任务路由', '流程协调', '结果汇总'],
-    pos: { x: canvasWidth / 2, y: 75 },
   },
-  {
-    name: 'profile_agent',
-    label: 'Profile',
-    role: '学习者画像',
+  { name: 'profile_agent', label: 'Profile', role: '学习者画像',
     description: '采集和分析学习者的认知特征、学习风格、知识基础等多维画像信息。',
-    icon: 'User',
-    category: 'worker',
+    icon: 'User', category: 'worker',
     keywords: ['画像采集', '学习风格', '认知分析', '个性化'],
-    pos: workerPositions[0],
   },
-  {
-    name: 'resource_agent',
-    label: 'Resource',
-    role: '资源生成',
+  { name: 'resource_agent', label: 'Resource', role: '资源生成',
     description: '根据学习需求自动生成教材、思维导图、代码案例等多模态学习资源。',
-    icon: 'FolderOpened',
-    category: 'worker',
+    icon: 'FolderOpened', category: 'worker',
     keywords: ['资源生成', '教材制作', '思维导图', '案例编写'],
-    pos: workerPositions[1],
   },
-  {
-    name: 'question_agent',
-    label: 'Question',
-    role: '自适应出题',
+  { name: 'question_agent', label: 'Question', role: '自适应出题',
     description: '基于知识图谱动态生成难度适配的练习题，支持错题追踪与举一反三。',
-    icon: 'EditPen',
-    category: 'worker',
+    icon: 'EditPen', category: 'worker',
     keywords: ['智能出题', '难度自适应', '错题追踪', '练习生成'],
-    pos: workerPositions[2],
   },
-  {
-    name: 'evaluation_agent',
-    label: 'Evaluation',
-    role: '学习评估',
+  { name: 'evaluation_agent', label: 'Evaluation', role: '学习评估',
     description: '综合评估学习效果，分析掌握程度和薄弱环节，提供改进建议。',
-    icon: 'TrendCharts',
-    category: 'worker',
+    icon: 'TrendCharts', category: 'worker',
     keywords: ['效果评估', '能力分析', '薄弱诊断', '改进建议'],
-    pos: workerPositions[3],
   },
-  {
-    name: 'path_agent',
-    label: 'Path',
-    role: '路径规划',
+  { name: 'path_agent', label: 'Path', role: '路径规划',
     description: '基于知识图谱构建个性化学习路径，规划最优学习顺序和里程碑。',
-    icon: 'Guide',
-    category: 'worker',
+    icon: 'Guide', category: 'worker',
     keywords: ['路径规划', '学习计划', '进度管理', '里程碑'],
-    pos: workerPositions[4],
   },
-  {
-    name: 'chat_agent',
-    label: 'Chat',
-    role: '对话助手',
+  { name: 'chat_agent', label: 'Chat', role: '对话助手',
     description: '通用对话交互 Agent，处理日常问答、概念解释和引导式学习对话。',
-    icon: 'ChatDotRound',
-    category: 'worker',
+    icon: 'ChatDotRound', category: 'worker',
     keywords: ['对话问答', '概念解释', '引导学习', '日常交互'],
-    pos: workerPositions[5],
   },
 ]
 
+// 使用动态布局填充注册表
+const workerDefs = defaultAgentsConfig.filter(c => c.category === 'worker')
+const arcPositions = computeArcLayout(workerDefs.length)
+let _wi = 0
 defaultAgentsConfig.forEach(cfg => {
-  agentsRegistry[cfg.name] = { ...cfg, calls: 0, tokens: 0, totalMs: 0, avgMs: 0, isActive: false, lastPreview: '' }
+  const pos = cfg.category === 'supervisor'
+    ? { x: canvasWidth / 2, y: 70 }
+    : arcPositions[_wi++]
+  agentsRegistry[cfg.name] = { ...cfg, pos, calls: 0, tokens: 0, totalMs: 0, avgMs: 0, isActive: false, lastPreview: '' }
 })
 
 // ── 计算属性 ──
@@ -517,6 +496,7 @@ function resetSession() {
 }
 
 function formatTokens(tokens: number): string {
+  if (tokens <= 0) return '—'
   return tokens >= 1000 ? (tokens / 1000).toFixed(1) + 'K' : String(tokens)
 }
 function formatDuration(ms: number): string {
@@ -549,8 +529,8 @@ watch(
       const now = Date.now()
       const elapsed = now - lastTraceTimestamp
       lastTraceTimestamp = now
-      const contentLength = latestMsg.content?.length || 0
-      const estimatedTokens = contentLength > 200 ? Math.round(contentLength / 1.8) : Math.round(contentLength / 3)
+      // 真实 Token 数据可通过 /api/agent-trace/latest 查询，SSE 事件不含 token 统计
+      const estimatedTokens = 0
 
       traceCounter++
       traces.value.push({ id: traceCounter, from, to, durationMs: elapsed, tokens: estimatedTokens, timestamp: now, isNew: true })
@@ -560,7 +540,6 @@ watch(
       const targetAgent = agentsRegistry[to]
       if (targetAgent) {
         targetAgent.calls++
-        targetAgent.tokens += estimatedTokens
         targetAgent.totalMs += elapsed
         targetAgent.avgMs = targetAgent.totalMs / targetAgent.calls
         if (latestMsg.content) targetAgent.lastPreview = latestMsg.content.slice(0, 80)
@@ -572,7 +551,7 @@ watch(
       const participatingAgents = new Set(traces.value.map((t: any) => t.to))
       sessionStats.activeAgents = participatingAgents.size
       sessionStats.totalRoutes = traces.value.length
-      sessionStats.totalTokens = Object.values(agentsRegistry).reduce((sum, a) => sum + a.tokens, 0)
+      sessionStats.totalTokens = chatStore.messages.length
       sessionStats.duration = now - sessionStartTime.value
 
       if (to !== 'supervisor') emitParticle(to)
@@ -597,44 +576,58 @@ onMounted(async () => {
     ])
 
     const manifestList: any[] = manifestResult.data || []
-    manifestList.forEach((item: any) => {
-      if (!agentsRegistry[item.name]) {
-        agentsRegistry[item.name] = {
-          name: item.name, label: item.displayName || item.name,
-          role: item.description?.slice(0, 10) || '', description: item.description || '',
-          icon: item.icon || 'QuestionFilled', category: item.category || 'worker',
-          calls: 0, tokens: 0, totalMs: 0, avgMs: 0, isActive: false, lastPreview: '',
-          keywords: item.keywords, pos: { x: 350, y: 220 },
+    if (manifestList.length > 0) {
+      // 以 manifest API 数据为权威来源，更新/新建所有 Agent 定义
+      manifestList.forEach((item: any) => {
+        if (agentsRegistry[item.name]) {
+          // 更新已有 Agent 的元数据
+          if (item.displayName) agentsRegistry[item.name].label = item.displayName
+          if (item.description) agentsRegistry[item.name].description = item.description
+          if (item.icon) agentsRegistry[item.name].icon = item.icon
+          if (item.keywords) agentsRegistry[item.name].keywords = item.keywords
+        } else {
+          // 新 Agent（不在 fallback 中）
+          agentsRegistry[item.name] = {
+            name: item.name, label: item.displayName || item.name,
+            role: item.description?.slice(0, 10) || '', description: item.description || '',
+            icon: item.icon || 'QuestionFilled', category: item.category || 'worker',
+            calls: 0, tokens: 0, totalMs: 0, avgMs: 0, isActive: false, lastPreview: '',
+            keywords: item.keywords, pos: { x: 0, y: 0 },  // 下面统一重新计算位置
+          }
         }
-      } else {
-        if (item.displayName) agentsRegistry[item.name].label = item.displayName
-        if (item.description) agentsRegistry[item.name].description = item.description
-        if (item.icon) agentsRegistry[item.name].icon = item.icon
-        if (item.keywords) agentsRegistry[item.name].keywords = item.keywords
-      }
-    })
+      })
+      // 用动态布局重新计算所有 worker 位置
+      const positions = computeArcLayout(
+        Object.values(agentsRegistry).filter(a => a.category === 'worker').length
+      )
+      let pi = 0
+      Object.values(agentsRegistry).forEach(a => {
+        if (a.category === 'supervisor') {
+          a.pos = { x: canvasWidth / 2, y: 70 }
+        } else if (a.category === 'worker') {
+          a.pos = positions[pi++] || { x: canvasWidth / 2, y: canvasHeight * 0.6 }
+        }
+      })
+    }
 
     const historyList: any[] = historyResult.data || []
     const agentCallCounts: Record<string, number> = {}
-    let totalContentChars = 0
 
     historyList.forEach((record: any) => {
       if (record.agent_type) {
         agentCallCounts[record.agent_type] = (agentCallCounts[record.agent_type] || 0) + 1
-        totalContentChars += record.content?.length || 0
       }
     })
 
     Object.entries(agentCallCounts).forEach(([name, count]) => {
       if (agentsRegistry[name]) {
         agentsRegistry[name].calls = count
-        agentsRegistry[name].tokens = Math.round((totalContentChars / historyList.length) * count / 1.8)
       }
     })
 
     sessionStats.totalRoutes = historyList.filter((h: any) => h.agent_type).length
     sessionStats.activeAgents = Object.keys(agentCallCounts).length
-    sessionStats.totalTokens = Math.round(totalContentChars / 1.8)
+    sessionStats.totalTokens = historyList.length  // 历史消息总数
 
   } catch (error) {
     console.warn('AgentCenter: 历史数据加载异常', error)
@@ -668,7 +661,7 @@ onUnmounted(() => {
 .topology-main {
   flex: 1; display: flex; flex-direction: column;
   min-width: 0; min-height: 0; overflow: hidden;
-  background: linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%);
+  background: #F8FAFC;
 }
 
 /* 工具条：三段式布局 */
@@ -774,7 +767,7 @@ onUnmounted(() => {
 
 /* ═══ Trace Panel ═══ */
 .trace-panel {
-  flex-shrink: 0; background: linear-gradient(180deg, #F8FAFC 0%, #F0F4FF 100%);
+  flex-shrink: 0; background: #F0F4FF;
   height: 140px; min-height: 80px; max-height: 170px;
   display: flex; flex-direction: column;
   overflow: hidden;
@@ -806,7 +799,7 @@ onUnmounted(() => {
   font-size: 11px; transition: all 0.2s; border-radius: 6px; margin: 1px 0;
 }
 .trace-entry:hover { background: #EFF6FF; }
-.trace-entry.fresh { background: linear-gradient(90deg, #D1FAE5 0%, transparent 100%); border-left: 3px solid #10B981; }
+.trace-entry.fresh { background: #D1FAE5; border-left: 3px solid #10B981; }
 .trace-time { font-size: 9px; color: #94A3B8; width: 56px; flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .trace-source, .trace-target {
   display: inline-flex; align-items: center; gap: 3px;
@@ -821,7 +814,7 @@ onUnmounted(() => {
 /* ═══ Right Sidebar ═══ */
 .sidebar-right {
   width: 260px; flex-shrink: 0;
-  background: linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%);
+  background: #F8FAFC;
   border-left: 1px solid #E8ECF1;
   overflow-y: auto; overflow-x: hidden;
   position: relative; animation: slideInRight 0.25s ease-out;
@@ -836,11 +829,11 @@ onUnmounted(() => {
 .detail-top-bar {
   display: flex; align-items: center; gap: 10px;
   padding: 14px 16px; border-bottom: 1px solid #E8ECF1;
-  background: linear-gradient(135deg, #F5F3FF 0%, #EFF6FF 100%);
+  background: #F5F3FF;
 }
 .detail-avatar-lg {
   width: 42px; height: 42px; border-radius: 12px;
-  background: linear-gradient(135deg, #8B5CF6 0%, #2563EB 100%);
+  background: #8B5CF6;
   display: flex; align-items: center; justify-content: center;
   color: #fff; flex-shrink: 0; box-shadow: 0 2px 8px rgba(139,92,246,.2);
 }
@@ -858,7 +851,7 @@ onUnmounted(() => {
 
 .metrics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .metric-cell {
-  background: linear-gradient(135deg, #F8FAFC 0%, #EFF6FF 100%); border: 1px solid #E2E8F0;
+  background: #EFF6FF; border: 1px solid #E2E8F0;
   border-radius: 10px; padding: 10px 8px; text-align: center;
   transition: all 0.2s;
 }
@@ -868,7 +861,7 @@ onUnmounted(() => {
 
 .keywords-wrap { display: flex; flex-wrap: wrap; gap: 5px; }
 .keyword-pill {
-  padding: 3px 10px; background: linear-gradient(135deg, #EEF2FF 0%, #E0E7FF 100%);
+  padding: 3px 10px; background: #EEF2FF;
   color: #4338CA; border-radius: 5px; font-size: 9px; font-weight: 600;
   border: 1px solid #C7D2FE;
 }

@@ -38,7 +38,7 @@
   --primary-hover: #1D4ED8;
   --primary-light: #DBEAFE;
   --primary-dark: #1E40AF;
-  --primary-gradient: linear-gradient(135deg, #3B82F6 0%, #2563EB 50%, #1D4ED8 100%);
+  --primary-gradient: #2563EB;
 
   /* Accent Colors — 绿/橙/紫辅助色系 */
   /* 绿色 Green - 活跃、成功、进行中 */
@@ -202,11 +202,11 @@ a:hover { color: var(--primary-hover); }
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, #CBD5E1, #94A3B8);
+  background: #94A3B8;
   border-radius: 10px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(180deg, #94A3B8, #64748B);
+  background: #64748B;
 }
 * {
   scrollbar-width: thin;

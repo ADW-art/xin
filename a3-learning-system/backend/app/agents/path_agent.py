@@ -35,6 +35,9 @@ PATH_PROMPT = """你是一个学习路径规划专家，风格对标 Coursera �
 ## 当前需求
 {topic}
 
+## 可用知识点（知识图谱节点 — 必须从中选择，禁止编造）
+{kg_nodes}
+
 ## 规划要求（必须完整输出以下5个部分，缺一不可）
 
 ### 1. 当前水平诊断
@@ -152,15 +155,119 @@ def _collect_bkt_state(user_id: int) -> dict:
         return {}
 
 
-def _load_multidiscipline_kg(kg) -> int:
-    """从全部 kg_*.json 文件加载多学科知识图谱 (替代单文件 governed)
+def _select_domain_files(topic: str) -> list[str]:
+    """根据用户主题映射到对应的学科 KG 文件（精确匹配，避免多学科混杂）
 
-    遍历 docs/ 下所有 kg_*.json，合并节点和边到 kg 对象。
+    设计原则（参考 Khan Academy / roadmap.sh 领域划分）：
+      - 一个主题只匹配一个最相关的学科 KG
+      - 匹配规则：关键词子串匹配 KG 文件中的 domain 字段 + 节点名称
+      - 无法匹配时返回空列表（调用方降级为通用输出）
+    """
+    import json as _json, os as _os, glob as _glob
+    topic_lower = topic.lower().strip()
+
+    # 关键词 → 学科文件映射（优先级从高到低）
+    KEYWORD_DOMAIN_MAP = [
+        # Python
+        (["python", "py", "装饰器", "生成器", "迭代器", "django", "flask"], "kg_python.json"),
+        # C++
+        (["c++", "cpp", "cplusplus", "stl", "模板", "指针", "引用"], "kg_cpp.json"),
+        # C (only if specifically asked, not generic "编程")
+        (["c语言", "c基础", "k&r", "c编程"], "kg_cpp.json"),
+        # Java
+        (["java", "jvm", "spring", "maven", "gradle", "android"], "kg_java.json"),
+        # Go
+        (["go", "golang", "go语言", "goroutine", "channel"], "kg_go.json"),
+        # Frontend
+        (["前端", "html", "css", "javascript", "js", "vue", "react", "typescript", "ts", "web"], "kg_frontend.json"),
+        # ML/AI
+        (["机器学习", "深度学习", "ml", "ai", "神经网络", "cnn", "rnn", "transformer", "nlp", "cv", "大模型", "llm", "pytorch", "tensorflow"], "kg_ml.json"),
+        # Algorithm/Data Structure
+        (["算法", "数据结构", "leetcode", "排序", "查找", "动态规划", "dp", "图论", "树", "链表", "栈", "队列", "哈希"], "kg_algorithm.json"),
+        # Network
+        (["网络", "tcp", "http", "ip", "dns", "协议", "socket", "路由", "交换机"], "kg_network.json"),
+        # Database
+        (["数据库", "sql", "mysql", "redis", "mongodb", "索引", "事务", "acid", "nosql"], "kg_database.json"),
+        # System/OS
+        (["操作系统", "os", "系统", "编译", "进程", "线程", "内存", "cache", "cpu", "汇编", "指令"], "kg_system.json"),
+        # Math (maps to algorithm's foundation)
+        (["数学", "线性代数", "概率", "离散", "微积分", "统计"], "kg_algorithm.json"),
+    ]
+
+    for keywords, filename in KEYWORD_DOMAIN_MAP:
+        for kw in keywords:
+            if kw in topic_lower:
+                return [filename]
+
+    # 模糊匹配：检查 KG 文件中的节点名称
+    docs_dir = _os.path.join(_os.path.dirname(__file__), "..", "..", "..", "docs")
+    docs_dir = _os.path.abspath(docs_dir)
+    for kg_file in sorted(_glob.glob(_os.path.join(docs_dir, "kg_*.json"))):
+        try:
+            with open(kg_file, "r", encoding="utf-8") as _f:
+                data = _json.load(_f)
+            for node in data.get("nodes", []):
+                name = node.get("name", "")
+                if name and (name.lower() in topic_lower or topic_lower in name.lower()):
+                    return [kg_file]
+        except Exception:
+            pass
+
+    return []  # 无法匹配 → 调用方降级
+
+
+def _load_single_domain_kg(kg, filename: str) -> int:
+    """加载单个学科的 KG 文件到 kg 对象"""
+    import json as _json, os as _os
+    docs_dir = _os.path.join(_os.path.dirname(__file__), "..", "..", "..", "docs")
+    docs_dir = _os.path.abspath(docs_dir)
+    kg_file = _os.path.join(docs_dir, filename)
+    if not _os.path.exists(kg_file):
+        return 0
+    try:
+        with open(kg_file, "r", encoding="utf-8") as _f:
+            data = _json.load(_f)
+        for node in data.get("nodes", []):
+            name = node.get("name", "")
+            if name and name not in kg.nodes:
+                kg.nodes.add(name)
+                kg.in_degree.setdefault(name, 0)
+        for edge in data.get("edges", []):
+            src, tgt = edge.get("source", ""), edge.get("target", "")
+            if src and tgt and src in kg.nodes and tgt in kg.nodes:
+                kg.edges.setdefault(src, set()).add(tgt)
+                kg.in_degree[tgt] = kg.in_degree.get(tgt, 0) + 1
+        return len(data.get("nodes", []))
+    except Exception:
+        return 0
+
+
+def _load_multidiscipline_kg(kg, topic: str = "") -> int:
+    """加载知识图谱——优先按 topic 匹配单学科，无匹配时加载全部
+
+    Args:
+        kg: KnowledgeGraph 实例
+        topic: 用户请求的学习主题（用于领域筛选）
+
     Returns: 加载的节点总数
     """
     import json as _json, os as _os, glob as _glob
     docs_dir = _os.path.join(_os.path.dirname(__file__), "..", "..", "..", "docs")
     docs_dir = _os.path.abspath(docs_dir)
+
+    # 尝试按主题匹配单学科
+    if topic:
+        domain_files = _select_domain_files(topic)
+        if domain_files:
+            total = 0
+            for f in domain_files:
+                total += _load_single_domain_kg(kg, f)
+            if total > 0:
+                logger.info("PathAgent: 主题 '%s' → 学科 '%s', nodes=%d", topic, domain_files[0], total)
+                return total
+
+    # 降级：加载全部学科（无明确主题时）
+    logger.info("PathAgent: 未匹配到单学科, 加载全部KG (topic='%s')", topic)
     total_nodes = 0
     for kg_file in sorted(_glob.glob(_os.path.join(docs_dir, "kg_*.json"))):
         try:
@@ -256,8 +363,8 @@ def _teaching_init(state: dict, topic: str) -> dict:
     """初始化教学流程: KG拓扑排序 → 构建 active_path → 返回首节点"""
     kg = get_graph()
     if not kg.nodes:
-        loaded = _load_multidiscipline_kg(kg)
-        logger.info("PathAgent(teaching): 多学科KG加载, nodes=%d", loaded)
+        loaded = _load_multidiscipline_kg(kg, topic=topic)
+        logger.info("PathAgent(teaching): KG加载, topic='%s', nodes=%d", topic, loaded)
 
     if kg.nodes:
         tracker = get_tracker(state.get("user_id", 0))
@@ -304,18 +411,36 @@ def _teaching_init(state: dict, topic: str) -> dict:
     first_node = active_path[0]
     logger.info("PathAgent(teaching): init 完成 first_node='%s' total=%d", first_node, len(active_path))
 
+    # v4: 自动触发首次教学 — 不等用户说"好", 直接链式路由到 resource_agent
+    from app.core.shared_utils import _build_llm_messages
+    all_msgs = state.get("messages", [])
+    intro = (
+        f"## 学习路径: {topic}\n\n"
+        f"共 {len(active_path)} 个知识点, 我们从 **{first_node}** 开始。\n\n"
+    )
+    # 注入教学进度上下文 → resource_agent 知道这是第几个节点
+    teach_ctx_for_resource = {
+        "topic": first_node,
+        "teaching": True,
+        "node_index": 0,
+        "total_nodes": len(active_path),
+        "active_path": active_path,
+        "completed_nodes": [],
+    }
     return {
         "current_agent": "path_agent",
+        "next_agent": "resource_agent",  # 直接路由, 不等用户确认
         "teaching_context": teaching_context,
-        "stream_buffer": "",
+        "stream_buffer": intro,
+        "context": teach_ctx_for_resource,
         "agent_outputs": {
             **state.get("agent_outputs", {}),
             "path_agent": {
-                "teaching_stage": "starting",
+                "teaching_stage": "node_ready",
                 "current_node": first_node,
                 "active_path": active_path,
                 "total_nodes": len(active_path),
-                "teach_context": {"topic": first_node, "teaching": True},
+                "teach_context": teach_ctx_for_resource,
             },
         },
     }
@@ -380,10 +505,22 @@ def _teaching_advance(state: dict, tc: dict) -> dict:
                  current_index + 1, len(active_path),
                  active_path[current_index], next_node)
 
+    # 阶段边界给结构化选项 (每3个节点一个阶段)
+    stage_note = ""
+    is_stage_boundary = (next_index > 0 and (next_index + 1) % 3 == 0)
+    if is_stage_boundary and next_index + 1 < len(active_path):
+        # 在 stream_buffer 中加入结构化选项标记，前端可渲染为按钮
+        upcoming = active_path[next_index + 1] if next_index + 1 < len(active_path) else ""
+        stage_note = (
+            f"\n\n---\n"
+            f"> 已学完第 {(next_index + 1) // 3} 阶段！接下来可以：\n"
+            f"> [继续学{upcoming}] [做练习题巩固] [复习本阶段内容] [换个主题]\n"
+        )
+
     return {
         "current_agent": "path_agent",
         "teaching_context": tc,
-        "stream_buffer": "",
+        "stream_buffer": stage_note,
         "agent_outputs": {
             **state.get("agent_outputs", {}),
             "path_agent": {
@@ -448,10 +585,9 @@ def path_agent_node(state: AgentState, spark: SparkClient) -> dict:
     try:
         kg = get_graph()
         if not kg.nodes:
-            # v3: 从多学科 KG 文件加载 (替代单文件 governed.json)
-            loaded = _load_multidiscipline_kg(kg)
-            logger.info("PathAgent: 多学科KG加载完成, nodes=%d, total_loaded=%d",
-                       len(kg.nodes), loaded)
+            # v3: 按用户主题加载对应的学科 KG (不再混搭全部学科)
+            loaded = _load_multidiscipline_kg(kg, topic=topic)
+            logger.info("PathAgent: KG加载完成, topic='%s', nodes=%d", topic, loaded)
 
         if kg.nodes:
             # BKT 已掌握的知识点作为起点
@@ -582,12 +718,18 @@ def path_agent_node(state: AgentState, spark: SparkClient) -> dict:
         if dag_path_enrichment:
             full_kg_text += "\n" + dag_path_enrichment
 
+        # 画像引导注入
+        from app.core.shared_utils import _build_profile_guide
+        profile_guide = _build_profile_guide(profile)
+
         kg_polish_system = (
             "你是一个学习路径规划专家。以下是由知识图谱拓扑排序和 BKT "
             "动态路径规划算法联合生成的学习路径。请你润色为一份清晰易懂的"
             "学习计划——保持阶段顺序不变，用热情专业的语气逐阶段说明学习"
             "内容和目标，提及复习时间节点。\n\n" + full_kg_text
         )
+        if profile_guide:
+            kg_polish_system += profile_guide
 
         # 携带对话历史，帮助 LLM 理解用户上下文
         from app.core.shared_utils import _build_llm_messages
@@ -595,31 +737,79 @@ def path_agent_node(state: AgentState, spark: SparkClient) -> dict:
             kg_polish_system,
             all_msgs,
             last_user_msg,
-            max_history=6,
+            max_history=12,
             topic_context=topic_ctx,
         )
-    else:
-        kb = profile.get("knowledge_base", {"未评估": "未知"})
-        path_system = PATH_PROMPT.format(
-            knowledge_base=str(kb),
-            learning_goal=profile.get("learning_goal", "技能提升"),
-            weekly_hours=weekly,
-            topic=topic,
-        )
+    if not messages:
+        # v4: 永远不让 LLM 凭空生成计划。从 KG 节点构建结构化计划, LLM 只做润色
+        if kg and kg.nodes:
+            # 从 KG 节点构建真实计划
+            topo_nodes = list(kg.nodes)
+            known = set()
+            try:
+                tracker = get_tracker(state.get("user_id", 0))
+                known = set(tracker.get_mastered())
+            except Exception:
+                pass
+            # 过滤已知节点, 保留待学节点
+            remaining = [n for n in topo_nodes if n not in known]
+            if not remaining:
+                remaining = topo_nodes
 
-        # 携带对话历史，确保路径规划感知用户的编程语言、排除约束等上下文
-        from app.core.shared_utils import _build_llm_messages
-        messages = _build_llm_messages(
-            path_system,
-            all_msgs,
-            last_user_msg,
-            max_history=6,
-            topic_context=topic_ctx,
-        )
+            # 使用 _build_dag_stages 构建阶段
+            dag_stages = _build_dag_stages(remaining, known, weekly)
+            schema = get_scheduler(state.get("user_id", 0))
+            schedule = _compute_review_schedule(dag_stages)
+
+            # 构建结构化计划文本 — LLM 只润色, 不改变结构
+            plan_lines = [f"## 知识图谱学习计划: {topic}", ""]
+            plan_lines.append(f"**领域节点总数**: {len(kg.nodes)} | **待学**: {len(remaining)} | **已掌握**: {len(known)}")
+            plan_lines.append(f"**每周投入**: {weekly} 小时 | **预计总耗时**: {sum(s['estimated_hours'] for s in dag_stages)} 小时")
+            plan_lines.append("")
+            for s in dag_stages:
+                concepts = s['concepts']
+                plan_lines.append(f"### 阶段 {s['stage']}: {concepts[0]}{' → ' + concepts[-1] if len(concepts) > 1 else ''}")
+                plan_lines.append(f"- **知识点**({len(concepts)}个): {'、'.join(concepts)}")
+                plan_lines.append(f"- **预计**: {s['estimated_hours']}小时 / {s['estimated_weeks']}周")
+                plan_lines.append(f"- **检验标准**: 掌握{concepts[0] if concepts else ''}的核心用法")
+                plan_lines.append("")
+            if schedule:
+                plan_lines.append("## 复习时间表")
+                for sr in schedule[:5]:
+                    reviews_str = " → ".join([f"第{r['day']}天" for r in sr.get('reviews', [])[:3]])
+                    plan_lines.append(f"- 阶段{sr['stage']}: {reviews_str}")
+
+            full_kg_text = "\n".join(plan_lines)
+            kg_polish_system = (
+                "你是一个学习路径规划专家。以下是由知识图谱拓扑排序算法自动生成的学习路径。"
+                "请润色为清晰的学习计划——保持阶段顺序、知识点名称和数量不变, "
+                "用热情专业的语气逐阶段说明学习内容和目标。\n\n"
+                "⚠️ 禁止: 增加/删除/重命名知识点, 改变阶段顺序, 编造数字。\n\n" + full_kg_text
+            )
+            if profile_guide:
+                kg_polish_system += profile_guide
+
+            from app.core.shared_utils import _build_llm_messages
+            messages = _build_llm_messages(
+                kg_polish_system,
+                all_msgs,
+                last_user_msg,
+                max_history=12,
+                topic_context=topic_ctx,
+            )
+        else:
+            # 最后兜底: 无 KG 数据 → 基于画像知识库生成简单计划
+            kb = profile.get("knowledge_base", {})
+            if isinstance(kb, dict) and kb:
+                concepts = sorted(kb.keys(), key=lambda k: kb.get(k, 0) if isinstance(kb.get(k), (int, float)) else 50, reverse=True)
+                fallback = f"## 学习建议: {topic}\n\n基于你的知识基础, 建议按以下顺序学习:\n\n" + "\n".join(f"- {c}" for c in concepts[:10])
+            else:
+                fallback = f"## 学习建议: {topic}\n\n你的知识基础尚未建立。从对话学习或上传教材开始, 系统将为你生成个性化学习路径。"
+            messages = [{"role": "system", "content": fallback}, {"role": "user", "content": last_user_msg[:200]}]
 
     # Token 截断：防止路径文本过长导致 API 超限
     from app.utils.llm_helper import truncate_messages
-    messages = truncate_messages(messages, max_tokens=3000)
+    messages = truncate_messages(messages, max_tokens=6000)
 
     logger.info("PathAgent: 准备流式生成学习路径")
 
@@ -642,7 +832,7 @@ def path_agent_node(state: AgentState, spark: SparkClient) -> dict:
         "stream_pending": {
             "messages": messages,
             "temperature": 0.5,
-            "max_tokens": 2048,
+            "max_tokens": 4096,
             "use_safe": True,
             "chunk_size": 2,
         },

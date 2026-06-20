@@ -71,6 +71,12 @@ const router = createRouter({
           meta: { requiresAuth: true },
         },
         {
+          path: 'custom-graph',
+          name: 'CustomGraph',
+          component: () => import('@/views/CustomGraphView.vue'),
+          meta: { requiresAuth: true },
+        },
+        {
           path: 'agents',
           name: 'AgentCenter',
           component: () => import('@/views/AgentCenter.vue'),

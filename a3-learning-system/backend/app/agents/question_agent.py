@@ -72,11 +72,13 @@ ANSWER_PATTERNS = [
     r'^[1-9][\s]*[A-Da-d][\s]*[1-9]', # "1A2B" "1 a 2 b"
     r'^[1-9][\s]*(?:正确|错误|对|错)', # "1对" "1 错误"
     r'^(?:答案是?|答案)[:\s]',         # "答案是: ..." "答案：..."
-    r'^(?:选|填|写|我的答案)',          # "选A" "填xxx"
-    r'[A-Da-d](?:$|[\s,，/]+)',       # 含单个选项字母
-    r'def\s+\w+\s*\(.*\):',            # Python代码答案
-    r'\[[\w\s,]+\]',                   # 列表/集合答案如 [1,2,3]
-    r'(?:True|False|None|\d+)$',       # 布尔/数字简答
+    r'^(?:选|填|我的答案)',              # "选A" "填xxx" — but NOT "写" (too common: "写代码")
+    # Fixed: only match single A-D letter at start of line or after numbering (not the English article "a")
+    r'^[A-Da-d](?:$|[\s,，/]+)',       # Single letter answer at start of text
+    r'(?<=\d)[A-Da-d](?:$|[\s,，/]+)', # Letter answer after a number e.g. "1A"
+    r'def\s+\w+\s*\(.*\):',            # Python代码答案 (only at start of line or after newline)
+    r'^\[[\w\s,]+\]$',                 # 列表/集合答案 (must be the entire message)
+    r'^(?:True|False|None|\d+)$',       # 布尔/数字简答 (entire message)
 ]
 
 
@@ -189,7 +191,7 @@ QUESTION_PROMPT = """你是一个自适应出题专家，对标 LeetCode + 洛�
 - 如果对话历史中有排除约束（"不要算法""不要递归""只用基础语法"），必须严格遵守
 
 ## 难度自适应
-- 当前难度为{ difficulty }（基于BKT知识追踪算法推算）
+- 当前难度为{difficulty}（基于BKT知识追踪算法推算）
 - 简单：单一概念，直接应用，不需要组合多个知识点
 - 中等：需要组合2-3个概念，有1-2个边界条件需处理
 - 较难：需要分析最优方案，有多处易错陷阱
@@ -286,7 +288,7 @@ def question_agent_node(state: AgentState, spark: SparkClient) -> dict:
         )}]
 
         from app.utils.llm_helper import truncate_messages
-        messages = truncate_messages(messages, max_tokens=3000)
+        messages = truncate_messages(messages, max_tokens=6000)
 
         # BKT 更新推迟到 LLM 批改完成后执行（chat.py _persist_agent_output 触发）
         # 届时将解析 GRADE_PROMPT 的 LLM 回复，提取每题正误后逐题更新 BKT
@@ -305,7 +307,7 @@ def question_agent_node(state: AgentState, spark: SparkClient) -> dict:
                     "stream_pending": {
                         "messages": messages,
                         "temperature": 0.4,
-                        "max_tokens": 2048,
+                        "max_tokens": 4096,
                     },
                 },
             },
@@ -358,6 +360,12 @@ def question_agent_node(state: AgentState, spark: SparkClient) -> dict:
             count=question_count,
         ) + ref_block
 
+        # 画像引导注入 — 新用户首次使用时收集画像
+        from app.core.shared_utils import _build_profile_guide
+        profile_guide = _build_profile_guide(profile)
+        if profile_guide:
+            question_system += profile_guide
+
         # 携带对话历史上下文，确保多轮对话中约束条件和语言偏好跨轮传递
         from app.core.shared_utils import _build_llm_messages
         all_msgs = state.get("messages", [])
@@ -365,12 +373,12 @@ def question_agent_node(state: AgentState, spark: SparkClient) -> dict:
             question_system,
             all_msgs,
             last_msg,
-            max_history=6,
+            max_history=12,
             topic_context=topic_ctx,
         )
 
         from app.utils.llm_helper import truncate_messages
-        messages = truncate_messages(messages, max_tokens=3000)
+        messages = truncate_messages(messages, max_tokens=6000)
 
         # 统一走 stream_pending 流式管线：Agent 只准备 messages，不自行调用 LLM
         # _bridge_stream 在 chat.py 中负责 true streaming（逐 chunk yield）
@@ -390,7 +398,7 @@ def question_agent_node(state: AgentState, spark: SparkClient) -> dict:
                     "stream_pending": {
                         "messages": messages,
                         "temperature": 0.6,
-                        "max_tokens": 2048,
+                        "max_tokens": 4096,
                         "use_safe": True,    # 启用 LLM 重试保护
                         "chunk_size": 2,     # 逐字打字机效果
                     },

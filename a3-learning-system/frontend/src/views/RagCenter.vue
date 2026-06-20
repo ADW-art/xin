@@ -254,7 +254,7 @@ onMounted(()=>{
 
 .rag-progress{display:flex;align-items:center;gap:10px;padding:0 24px 8px;flex-shrink:0}
 .rp-bar{flex:1;height:4px;background:#F1F5F9;border-radius:2px;overflow:hidden}
-.rp-fill{height:100%;background:linear-gradient(90deg,#2563EB,#8B5CF6);border-radius:2px;transition:width .3s}
+.rp-fill{height:100%;background:#2563EB;border-radius:2px;transition:width .3s}
 .rp-text{font-size:var(--font-xs);color:var(--text-muted);white-space:nowrap}
 .rag-err{padding:8px 24px;font-size:var(--font-xs);color:#EF4444;display:flex;align-items:center;gap:6px}
 .rag-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--text-muted)}

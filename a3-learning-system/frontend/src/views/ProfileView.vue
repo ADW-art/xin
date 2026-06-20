@@ -112,6 +112,10 @@
                 </div>
               </div>
 
+              <div v-else-if="d.key === 'knowledge_base'" class="dim-empty">
+                暂无数据，开始对话学习后自动更新
+              </div>
+
               <div v-else class="dim-val">{{ displayRawVal(d.key) || '点击编辑填写' }}</div>
             </div>
 
@@ -250,12 +254,23 @@ const radarIndicators: Record<string, { label: string; max: number }> = {
 }
 
 const knowledgeEntries = computed(() => {
-  const kb = profileData.value.knowledge_base
-  if (!kb) return []
-  return Object.entries(kb).map(([name, score]) => ({
-    name,
-    score: Math.min(100, Math.max(0, Math.round(score))),
-  }))
+  const kbRaw: unknown = profileData.value.knowledge_base
+  if (!kbRaw) return []
+  // 兼容后端 MySQL JSON 列可能返回 JSON 字符串的情况
+  let kb: Record<string, number>
+  if (typeof kbRaw === 'string') {
+    try { kb = JSON.parse(kbRaw) } catch { return [] }
+  } else if (typeof kbRaw === 'object' && kbRaw !== null) {
+    kb = kbRaw as Record<string, number>
+  } else {
+    return []
+  }
+  return Object.entries(kb)
+    .filter(([, score]) => typeof score === 'number' && !isNaN(score))
+    .map(([name, score]) => ({
+      name,
+      score: Math.min(100, Math.max(0, Math.round(score))),
+    }))
 })
 
 const styleMap: Record<string, { label: string; icon: string }> = {
@@ -443,28 +458,8 @@ function initRadarChart() {
       data: [{
         value: dataValues,
         name: '当前水平',
-        areaStyle: {
-          color: {
-            type: 'linear', x: 0, y: 0, x2: 1, y2: 1,
-            colorStops: [
-              { offset: 0, color: 'rgba(37,99,235,.25)' },
-              { offset: 0.4, color: 'rgba(16,185,129,.20)' },
-              { offset: 0.7, color: 'rgba(245,158,11,.15)' },
-              { offset: 1, color: 'rgba(139,92,246,.22)' },
-            ],
-          },
-        },
-        lineStyle: {
-          color: {
-            type: 'linear', x: 0, y: 0, x2: 1, y2: 0,
-            colorStops: [
-              { offset: 0, color: '#2563EB' },
-              { offset: 0.5, color: '#10B981' },
-              { offset: 1, color: '#8B5CF6' },
-            ],
-          },
-          width: 2.5,
-        },
+        areaStyle: { color: 'rgba(37,99,235,.18)' },
+        lineStyle: { color: '#2563EB', width: 2.5 },
         itemStyle: { color: '#2563EB', borderColor: '#FFFFFF', borderWidth: 2 },
       }],
       symbol: 'circle',

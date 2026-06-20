@@ -263,12 +263,17 @@ class KnowledgeNode:
         self._dirty = True
 
         # ── 构建步骤明细 ──
+        # p_before = 更新前的真实 P(known) 值
+        if self.update_history:
+            p_before_val = self.update_history[-1].p_final
+        else:
+            # 第一次答题前：使用当前节点的初始 p_known
+            p_before_val = round(p_known, 6)
+
         step = UpdateStep(
             step_no=self.total_attempts,
             is_correct=is_correct,
-            p_before=p_known if self.total_attempts <= 1 else (
-                self.update_history[-1].p_final if self.update_history else p_known
-            ),
+            p_before=p_before_val,
             p_after_bayes=round(p_after_bayes, 6),
             p_after_learn=round(p_after_learn, 6),
             p_final=round(p_final, 6),
@@ -286,17 +291,6 @@ class KnowledgeNode:
             },
         )
 
-        # 修正 p_before：取更新前的真实值
-        if self.total_attempts >= 2 and len(self.update_history) > 0:
-            step.p_before = self.update_history[-1].p_final
-        elif self.total_attempts == 1:
-            # 第一次更新前是初始值
-            step.p_before = round(
-                self._p_learn if False else DEFAULT_PARAMS["p_initial"], 4
-            )
-            # 从 history 反推更准确
-            pass
-
         self.update_history.append(step)
 
         logger.debug(
@@ -310,10 +304,17 @@ class KnowledgeNode:
         return step
 
     def get_effective_p_initial(self) -> float:
-        """获取有效的初始概率（考虑首次更新前的状态）"""
+        """获取有效的初始概率 P(L₀)
+
+        优先级：
+        1. 有历史记录 → 取第一次更新前的值（history[0].p_before）
+        2. 无历史记录但已答题（异常边界）→ 返回当前 p_known
+        3. 完全新节点 → 返回当前 p_known（即构造时传入的初始值）
+        """
         if self.update_history:
             return self.update_history[0].p_before
-        return self.p_known if self.total_attempts == 0 else DEFAULT_PARAMS["p_initial"]
+        # 无论是否答过题，无历史时 p_known 就是初始值
+        return self.p_known
 
     def apply_em_params(self, fit_result: EMFitResult):
         """应用 EM 拟合结果到本节点（不覆盖 CUSTOM 来源的参数）"""
@@ -422,12 +423,15 @@ class KnowledgeNode:
 # EM 参数估计算法
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _bkt_forward(params: tuple, observations: list[bool]) -> tuple[list[float], float]:
-    """BKT 前向传播 + 对数似然计算
+def _bkt_forward(params: tuple, observations: list[bool], p_forget: float = 0.0) -> tuple[list[float], float]:
+    """BKT 前向传播 + 对数似然计算（与 KnowledgeNode.update() 保持完全一致）
+
+    流程：贝叶斯后验 → 观测似然 → P(T)学习转移 → P(F)遗忘衰减 → 钳制
 
     Args:
         params: (p_initial, p_learn, p_guess, p_slip)
         observations: 答题结果序列 [True, False, True, ...]
+        p_forget: 遗忘概率（默认0，与update()一致）
 
     Returns:
         (p_known_list, log_likelihood)
@@ -438,7 +442,7 @@ def _bkt_forward(params: tuple, observations: list[bool]) -> tuple[list[float], 
     p_history = []
 
     for obs in observations:
-        # 贝叶斯后验
+        # ── 阶段1: 贝叶斯后验（与 update() 一致）──
         if obs:
             num = p * (1.0 - p_sli)
             den = num + (1.0 - p) * p_gue
@@ -448,16 +452,25 @@ def _bkt_forward(params: tuple, observations: list[bool]) -> tuple[list[float], 
 
         p_posterior = num / den if den > 1e-10 else p
 
-        # 观测概率（用于计算似然）
+        # ── 观测概率（用于计算对数似然）──
+        # P(obs | state) 在贝叶斯后验之前计算，因为这是观测模型
         p_obs_given_known = (1.0 - p_sli) if obs else p_sli
         p_obs_given_unknown = p_gue if obs else (1.0 - p_gue)
         p_obs = p * p_obs_given_known + (1.0 - p) * p_obs_given_unknown
         p_obs = max(p_obs, 1e-10)
         log_likelihood += math.log(p_obs)
 
-        # 学习转移（规范 BKT：始终施加）
-        p = p_posterior + (1.0 - p_posterior) * p_lrn
-        p = max(0.001, min(0.999, p))
+        # ── 阶段2: 学习转移 P(T)（始终施加，与 update() 一致）──
+        p_after_learn = p_posterior + (1.0 - p_posterior) * p_lrn
+
+        # ── 阶段3: 遗忘衰减 P(F)（与 update() 一致）──
+        if p_forget > 0:
+            p_final = p_after_learn * (1.0 - p_forget)
+        else:
+            p_final = p_after_learn
+
+        # 钳制到 [0.001, 0.999]
+        p = max(0.001, min(0.999, p_final))
         p_history.append(p)
 
     return p_history, log_likelihood
@@ -495,19 +508,26 @@ def _compute_rmse(params: tuple, observations: list[bool]) -> float:
 
 
 def estimate_params_em(observations: list[bool], max_iter: int = 50, tol: float = 1e-4) -> Optional[EMFitResult]:
-    """简化 EM 算法估计 BKT 四参数
+    """BKT 四参数 EM 估计（坐标下降 + 黄金分割搜索，参考 pyBKT 设计）
 
-    使用坐标下降 + 数值优化的混合策略：
-    1. 固定三个参数，用二分搜索优化第四个参数
-    2. 循环迭代直到收敛或达到最大迭代次数
+    算法流程（参考 Badrinath et al. 2021 pyBKT 实现）：
+    1. 多组初始值启动（避免局部最优）
+    2. 每轮迭代：坐标下降逐个优化四个参数
+    3. 单参数优化：黄金分割搜索在合理范围内找最优值
+    4. 收敛判定：对数似然变化 < tol 且 iteration > 3
+    5. 跨种子保留全局最优参数
 
-    这是 pyBKT EM 的轻量级实现，适用于单个知识点的参数估计。
-    对于生产环境的大规模多技能拟合，建议使用 pyBKT 库。
+    参数约束（参考 pyBKT 默认边界）：
+      P(L0) ∈ [0.01, 0.85]  — 初始掌握概率不应过高
+      P(T)  ∈ [0.01, 0.70]  — 学习率通常不超过0.7
+      P(G)  ∈ [0.01, 0.50]  — 猜测率上限0.5
+      P(S)  ∈ [0.01, 0.40]  — 失误率上限0.4
+      P(G)+P(S) < 1         — 观测模型合理性约束
 
     Args:
         observations: 答题结果序列（至少需要 EM_MIN_OBSERVATIONS 条）
-        max_iter:     最大迭代次数
-        tol:          收敛阈值（对数似然变化 < tol 时停止）
+        max_iter:     每个种子的最大迭代次数
+        tol:          收敛阈值
 
     Returns:
         EMFitResult 或 None（数据不足时）
@@ -516,102 +536,150 @@ def estimate_params_em(observations: list[bool], max_iter: int = 50, tol: float 
     if n < EM_MIN_OBSERVATIONS:
         return None
 
-    # 初始参数
-    best_ll = -float('inf')
-    best_params = (DEFAULT_PARAMS["p_initial"], DEFAULT_PARAMS["p_learn"],
-                   DEFAULT_PARAMS["p_guess"], DEFAULT_PARAMS["p_slip"])
-
-    # 多组随机初始值，避免局部最优
-    init_seeds = [
-        (0.3, 0.2, 0.15, 0.1),
-        (0.2, 0.3, 0.1, 0.15),
-        (0.4, 0.15, 0.2, 0.05),
-        (0.15, 0.35, 0.25, 0.08),
-        (0.5, 0.1, 0.1, 0.2),
-        # 数据驱动初始值
-        (sum(observations) / n, 0.2, 0.15, 0.1),
+    # ── 参数搜索范围（pyBKT 风格的合理边界）──
+    PARAM_BOUNDS = [
+        (0.01, 0.85),   # p_initial: 初始掌握概率
+        (0.01, 0.70),   # p_learn: 学习转移率
+        (0.01, 0.50),   # p_guess: 猜测率
+        (0.01, 0.40),   # p_slip: 失误率
     ]
 
-    for seed in init_seeds:
+    # ── 多组初始值（数据驱动 + 经验默认 + 边界探测）──
+    correct_rate = sum(observations) / n
+    init_seeds = [
+        # 标准经验初始值（Corbett & Anderson 1995）
+        (0.3, 0.2, 0.15, 0.1),
+        # 数据驱动：用正确率估计 P(L0)
+        (min(correct_rate * 0.9, 0.7), 0.2, 0.15, 0.1),
+        # 高学习率假设
+        (0.2, 0.35, 0.1, 0.15),
+        # 低猜测高失误假设
+        (0.4, 0.15, 0.08, 0.2),
+        # 低初始高学习假设
+        (0.1, 0.4, 0.2, 0.05),
+        # 接近收敛的初始猜测
+        (min(correct_rate, 0.6), 0.25, 0.1, 0.08),
+    ]
+
+    # ── 全局最优追踪（跨所有种子）──
+    global_best_ll = -float('inf')
+    global_best_params = None
+    global_best_iterations = 0
+    global_converged = False
+    total_actual_iterations = 0
+
+    for seed_idx, seed in enumerate(init_seeds):
         params = list(seed)
         prev_ll = -float('inf')
-        converged = False
+        seed_converged = False
+        actual_iterations = 0
 
         for iteration in range(max_iter):
             _, ll = _bkt_forward(tuple(params), observations)
+            actual_iterations = iteration + 1
+            total_actual_iterations += 1
 
-            if ll > best_ll:
-                best_ll = ll
-                best_params = tuple(params)
+            # 更新全局最优
+            if ll > global_best_ll:
+                global_best_ll = ll
+                global_best_params = tuple(params)
+                global_best_iterations = actual_iterations
+                global_converged = False  # 新的最优，重置收敛标记
 
-            # 收敛检查
+            # 收敛检查：对数似然变化足够小且已迭代足够多次
             if abs(ll - prev_ll) < tol and iteration > 3:
-                converged = True
+                seed_converged = True
+                # 只有当这个种子达到全局最优时才标记全局收敛
+                if abs(ll - global_best_ll) < 1e-6:
+                    global_converged = True
                 break
             prev_ll = ll
 
-            # 坐标下降：逐个优化每个参数
+            # ── 坐标下降：逐个优化每个参数（黄金分割搜索）──
             for idx in range(4):
-                best_val = params[idx]
-                best_local_ll = ll
+                low, high = PARAM_BOUNDS[idx]
 
-                # 在合理范围内网格搜索
-                low, high = 0.01, 0.99
-                if idx == 0:  # p_initial
-                    low, high = 0.01, 0.8
-                elif idx == 1:  # p_learn
-                    low, high = 0.01, 0.7
-                elif idx == 2:  # p_guess
-                    low, high = 0.01, 0.5
-                elif idx == 3:  # p_slip
-                    low, high = 0.01, 0.4
+                def _eval_param(val_idx: int, val: float) -> float:
+                    """评估某个参数取特定值时的对数似然"""
+                    test = list(params)
+                    test[val_idx] = max(low, min(high, val))
+                    _, score = _bkt_forward(tuple(test), observations)
+                    return score
 
-                for trial in [low, high, (low + high) / 2]:
-                    test_params = list(params)
-                    test_params[idx] = trial
-                    _, trial_ll = _bkt_forward(tuple(test_params), observations)
-                    if trial_ll > best_local_ll:
-                        best_local_ll = trial_ll
-                        best_val = trial
+                current_val = params[idx]
+                current_ll = _eval_param(idx, current_val)
 
-                # 细粒度搜索最佳值附近
-                for _ in range(5):
-                    delta = (high - low) / 20
-                    candidates = [
-                        max(low, min(high, best_val + delta)),
-                        max(low, min(high, best_val - delta)),
-                        best_val,
-                    ]
-                    for c in candidates:
-                        test_params = list(params)
-                        test_params[idx] = c
-                        _, trial_ll = _bkt_forward(tuple(test_params), observations)
-                        if trial_ll > best_local_ll:
-                            best_local_ll = trial_ll
-                            best_val = c
+                # 黄金分割搜索（比网格搜索更高效，参考 scipy.optimize 的实现）
+                GR = (math.sqrt(5) - 1) / 2  # 0.618...
 
-                params[idx] = best_val
+                for _ in range(8):  # 8次黄金分割细化
+                    range_width = high - low
+                    if range_width < 1e-5:
+                        break
 
-    # 计算最终指标
-    final_ll = best_ll
-    rmse = _compute_rmse(best_params, observations)
+                    c = high - GR * range_width
+                    d = low + GR * range_width
+                    fc = _eval_param(idx, c)
+                    fd = _eval_param(idx, d)
+
+                    if fc > fd:
+                        high = d
+                        if fc > current_ll:
+                            current_val = c
+                            current_ll = fc
+                    else:
+                        low = c
+                        if fd > current_ll:
+                            current_val = d
+                            current_ll = fd
+
+                params[idx] = max(low, min(high, current_val))
+
+        logger.debug(
+            "EM seed #%d: LL=%.3f iters=%d converged=%s params=[%.3f, %.3f, %.3f, %.3f]",
+            seed_idx + 1,
+            _bkt_forward(tuple(params), observations)[1],
+            actual_iterations, seed_converged,
+            params[0], params[1], params[2], params[3],
+        )
+
+    # ── 无效结果保护 ──
+    if global_best_params is None:
+        logger.warning("EM拟合失败: 所有种子均未产生有效结果")
+        return None
+
+    # ── 参数合理性后处理 ──
+    final_params = list(global_best_params)
+    pg, ps = final_params[2], final_params[3]
+    if pg + ps >= 0.95:
+        # P(G) + P(S) 过大，按比例缩减
+        scale = 0.45 / (pg + ps)
+        final_params[2] = round(pg * scale, 4)
+        final_params[3] = round(ps * scale, 4)
+        logger.info("EM参数修正: P(G)+P(S)=%.3f>0.95, 缩放至 [%.3f, %.3f]", pg+ps, final_params[2], final_params[3])
+
+    # ── 计算最终指标 ──
+    final_ll = _bkt_forward(tuple(final_params), observations)[1]
+    rmse = _compute_rmse(tuple(final_params), observations)
 
     result = EMFitResult(
-        p_initial=round(best_params[0], 4),
-        p_learn=round(best_params[1], 4),
-        p_guess=round(best_params[2], 4),
-        p_slip=round(best_params[3], 4),
-        iterations=max_iter,
-        converged=converged,
+        p_initial=round(final_params[0], 4),
+        p_learn=round(final_params[1], 4),
+        p_guess=round(final_params[2], 4),
+        p_slip=round(final_params[3], 4),
+        iterations=global_best_iterations,       # 实际使用的迭代次数
+        converged=global_converged,               # 全局最优是否收敛
         log_likelihood=round(final_ll, 4),
         rmse=round(rmse, 4),
         n_observations=n,
     )
 
     logger.info(
-        "EM拟合完成: L0=%.3f T=%.3f G=%.3f S=%.3f | LL=%.2f RMSE=%.4f iters=%d obs=%d",
+        "EM拟合完成: L0=%.3f T=%.3f G=%.3f S=%.3f | LL=%.2f RMSE=%.4f "
+        "iters=%d converged=%s obs=%d seeds=%d",
         result.p_initial, result.p_learn, result.p_guess, result.p_slip,
-        result.log_likelihood, result.rmse, result.iterations, n,
+        result.log_likelihood, result.rmse,
+        result.iterations, result.converged, n, len(init_seeds),
     )
 
     return result
@@ -628,6 +696,104 @@ def estimate_params_from_node(node: KnowledgeNode) -> Optional[EMFitResult]:
     result = estimate_params_em(observations)
     if result:
         node.apply_em_params(result)
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 不确定性量化（Bootstrap 置信区间，参考 StanBKT 设计）
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def estimate_uncertainty(
+    observations: list[bool],
+    n_bootstrap: int = 100,
+    confidence: float = 0.90,
+) -> Optional[dict]:
+    """通过 Bootstrap 方法估计 BKT 参数的不确定性（参考 Pradhan et al. 2026 StanBKT）
+
+    原理：对观测序列进行 n_bootstrap 次有放回重采样，每次重采样运行 EM 拟合，
+          得到参数分布，进而计算置信区间。
+
+    输出示例：
+        {
+            "p_initial": {"mean": 0.28, "std": 0.08, "ci_low": 0.18, "ci_high": 0.42},
+            "p_learn":   {"mean": 0.22, "std": 0.06, "ci_low": 0.12, "ci_high": 0.34},
+            ...
+            "n_bootstrap": 100,
+            "confidence": 0.90,
+        }
+
+    Args:
+        observations: 原始答题序列
+        n_bootstrap:  Bootstrap 重采样次数（默认100，权衡精度与性能）
+        confidence:   置信水平（默认90%）
+
+    Returns:
+        参数不确定性字典或 None
+    """
+    import random as _random
+
+    n = len(observations)
+    if n < EM_MIN_OBSERVATIONS:
+        return None
+
+    param_names = ["p_initial", "p_learn", "p_guess", "p_slip"]
+    bootstrap_samples = {name: [] for name in param_names}
+
+    # 设置随机种子可复现
+    rng = _random.Random(hash(tuple(observations)) % (2**32))
+
+    successful_fits = 0
+    for i in range(n_bootstrap):
+        # 有放回重采样
+        sample = [observations[rng.randint(0, n - 1)] for _ in range(n)]
+        fit = estimate_params_em(sample, max_iter=20)  # Bootstrap内用较少迭代加速
+        if fit:
+            bootstrap_samples["p_initial"].append(fit.p_initial)
+            bootstrap_samples["p_learn"].append(fit.p_learn)
+            bootstrap_samples["p_guess"].append(fit.p_guess)
+            bootstrap_samples["p_slip"].append(fit.p_slip)
+            successful_fits += 1
+
+    if successful_fits < 10:
+        logger.warning("Bootstrap不确定性估计失败: %d/%d 次拟合成功", successful_fits, n_bootstrap)
+        return None
+
+    # 计算统计量
+    alpha = 1 - confidence
+    result = {}
+    for name in param_names:
+        values = sorted(bootstrap_samples[name])
+        k = len(values)
+        idx_low = int((alpha / 2) * k)
+        idx_high = int((1 - alpha / 2) * k) - 1
+        idx_low = max(0, idx_low)
+        idx_high = min(k - 1, idx_high)
+
+        mean_val = sum(values) / k
+        std_val = (sum((v - mean_val) ** 2 for v in values) / max(k - 1, 1)) ** 0.5
+
+        result[name] = {
+            "mean": round(mean_val, 4),
+            "std": round(std_val, 4),
+            "ci_low": round(values[idx_low], 4),
+            "ci_high": round(values[idx_high], 4),
+            "n_samples": k,
+        }
+
+    result["_meta"] = {
+        "n_bootstrap": n_bootstrap,
+        "successful_fits": successful_fits,
+        "confidence": confidence,
+    }
+
+    logger.info(
+        "Bootstrap不确定性: P(L₀)=%.3f±%.3f [%.3f, %.3f] | P(T)=%.3f±%.3f (%d/%d)",
+        result["p_initial"]["mean"], result["p_initial"]["std"],
+        result["p_initial"]["ci_low"], result["p_initial"]["ci_high"],
+        result["p_learn"]["mean"], result["p_learn"]["std"],
+        successful_fits, n_bootstrap,
+    )
+
     return result
 
 
@@ -932,6 +1098,15 @@ def sync_bkt_to_profile(user_id: int) -> bool:
 
 
 def sync_profile_to_bkt(user_id: int, kb: dict):
+    """将用户画像 knowledge_base 同步到 BKT 追踪器作为个性化先验
+
+    修正：不再直接用 profile_score/100 作为 p_known（会导致 0次答题却显示95%的矛盾）。
+    改为用 sigmoid 映射将画像分数转化为合理的 BKT 先验概率 P(L₀)：
+      - score=0  → P(L₀)=0.05 (几乎不会)
+      - score=50 → P(L₀)=0.30 (默认先验)
+      - score=100→ P(L₀)=0.60 (较高但非精通，需答题验证）
+    真正的掌握度必须通过 record_answer() 的贝叶斯更新来累积。
+    """
     if not user_id or not kb:
         return
     tracker = get_tracker(user_id)
@@ -945,10 +1120,20 @@ def sync_profile_to_bkt(user_id: int, kb: dict):
             score_val = float(score)
         except (TypeError, ValueError):
             score_val = 50.0
-        p_known = max(0.05, min(0.95, score_val / 100.0))
+
+        # Sigmoid映射：将0-100分数映射到合理的BKT先验范围[0.05, 0.60]
+        # 公式：P(L₀) = 0.05 + 0.55 / (1 + exp(-(score_val - 50) / 20))
+        # score=0  → ~0.06,  score=30 → ~0.15,  score=50 → ~0.325
+        # score=70 → ~0.50,  score=100→ ~0.59
+        import math as _math
+        raw = score_val / 100.0  # normalize to [0,1]
+        p_known = 0.05 + 0.55 / (1.0 + _math.exp(-(raw - 0.5) * 8.0))
+        p_known = max(0.05, min(0.60, p_known))
+
         tracker.get_or_create(concept, p_known=p_known)
         init_count += 1
-        logger.info("Profile→BKT: '%s' 初始化 p=%.3f (profile=%.1f)", concept, p_known, score_val)
+        logger.info("Profile→BKT: '%s' 先验 P(L₀)=%.3f (profile=%.1f)", concept, p_known, score_val)
+
     if init_count > 0:
         tracker.persist_to_db()
         logger.info("Profile→BKT: user_id=%d 初始化 %d 个概念", user_id, init_count)

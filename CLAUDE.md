@@ -6,16 +6,55 @@
 
 ---
 
-## 一、项目当前状态
+## 一、项目当前状态（2026-06-07 更新）
 
-| 状态项 | 详情 |
+### 整体进度
+| 层面 | 完成度 | 评价 |
+|------|:--:|------|
+| 后端 Agent+服务 | **95%** | 超出省一标准：BKT知识追踪 + 知识图谱拓扑排序 + 混合检索(RRF+CrossEncoder) 三件自研算法 |
+| 后端 API+模型 | **95%** | 8个路由模块、7张ORM表、JWT认证全部就绪 |
+| 前端页面骨架 | **70%** | 7个页面全部存在，SSE流式对话可用，但数据层薄弱 |
+| 前端 Stores/API | **25%** | 只有 chat.ts。user.ts 和 learning.ts 缺失，API 封装散落 |
+| 基础设施 | **100%** | MySQL+Redis+MinIO+ChromaDB 全部 Docker 运行中 |
+| 知识库内容 | **5%** | RAG 检索架构完美但未注入教材 |
+| 测试 | **0%** | 完全空白 |
+| 比赛文档 | **0%** | 全部未启动 |
+
+### 当前服务状态
+```
+Docker: a3-mysql(UP)  a3-redis(UP)  a3-minio(UP)  a3-chromadb(UP)
+.env:   已配置讯飞星火 3 个 Key，MySQL 端口 3307
+```
+
+### 后端已实现的核心亮点
+| 模块 | 说明 |
 |------|------|
-| 开发阶段 | 尚未开始编码，处于规划阶段 |
-| 项目脚手架 | 未创建，代码目录不存在 |
-| Docker | ✅ 已安装，可正常运行 |
-| 讯飞星火 API Key | ✅ 已获取，API 调用通过 |
-| settings.local.json | 已配置好所有权限 |
-| MCP 服务 | Playwright（可用）+ MySQL（可用） |
+| **混合检索 (rag_service.py)** | FAISS 稠密 + BM25 稀疏 + RRF 融合 + BGE-Reranker 精排，企业级架构 |
+| **BKT 追踪 (bkt_service.py)** | 贝叶斯四参数模型 (P(L0)/P(T)/P(G)/P(S))，自适应难度调节 |
+| **知识图谱 (knowledge_graph.py)** | TF-IDF 知识点提取 → 共现分析 → DAG 拓扑排序 → 学习路径生成 |
+| **复习调度 (review_scheduler.py)** | 艾宾浩斯遗忘曲线 + 间隔递增复习 (Spaced Repetition) |
+| **文档解析 (document_parser.py)** | PDF (pdfplumber+PaddleOCR) + Word + Markdown 全格式 |
+| **FAISS 多子索引 (faiss_client.py)** | 按学科分索引，路由+懒加载 |
+
+### 前端当前状态（逐个视图）
+| 视图 | 完成度 | 问题 |
+|------|:--:|------|
+| Login.vue | 90% | 功能可用 |
+| Dashboard.vue | 40% | **全部硬编码假数据**，统计/雷达图/进度条数据固定 |
+| ChatView.vue | 85% | SSE 流式+Agent 切换正常，缺历史侧栏 |
+| ProfileView.vue | 80% | 6 维展示+编辑可用 |
+| ResourceView.vue | 40% | 只有列表，**无详情页**，无 MindMap 渲染 |
+| AssessmentView.vue | 35% | **环形图数据硬编码**，仅为 Markdown 文本 |
+| LearningPathView.vue | 25% | 仅 Markdown 渲染，**vue-flow 已装但未使用**，无 DAG 图 |
+
+### 关键缺失
+- ❌ `stores/user.ts` 不存在 — 登录状态无集中管理
+- ❌ `stores/learning.ts` 不存在
+- ❌ `api/*.ts` 只有 index.ts 和 chat.ts — auth/profile/resource 封装全部缺失
+- ❌ MindMap.vue 组件不存在 — markmap 已装但未创建组件
+- ❌ StreamingText.vue 不存在 — 流式打字效果未实现
+- ❌ Resource 详情页不存在 — 无法查看生成的思维导图/代码/文档
+- ❌ RAG 知识库为空 — 没有注入任何教材
 
 ## 二、技术栈总表
 
@@ -32,7 +71,7 @@
 | 向量数据库 | ChromaDB | 0.5+ | 轻量、Python原生、免费本地部署 |
 | 缓存 | Redis | 7.x | 会话管理、热数据缓存 |
 | 对象存储 | MinIO | latest | 资源文件存储（文档/图片/视频） |
-| Embedding | BGE中文模型 | bge-large-zh-v1.5 | 免费本地跑，中文效果好 |
+| Embedding | BGE-M3 + BGE-Reranker-v2 | bge-m3 / reranker-v2-m3 | 稠密+稀疏双向量，CrossEncoder精排 |
 | 部署 | Docker + Docker Compose | latest | 一键启动所有服务 |
 
 ### Python 依赖清单
@@ -44,7 +83,7 @@ pydantic==2.9.0
 python-multipart==0.0.12
 
 # AI / Agent
-langgraph==0.2.0
+langgraph>=0.2.20,<0.3
 langchain==0.3.0
 langchain-community==0.3.0
 websocket-client==1.8.0        # 讯飞星火用WebSocket协议
@@ -92,126 +131,132 @@ dayjs@1.11+                    # 日期处理
 ## 三、项目目录结构
 
 ```
-a3-learning-system/                    # 项目根目录
-├── docker-compose.yml                 # 一键启动所有基础设施
-├── .env.example                       # 环境变量模板
+a3-learning-system/                          # 项目根目录
+├── docker-compose.yml                       # 一键启动 MySQL+Redis+MinIO+ChromaDB
+├── .env                                     # 已配置讯飞Key + MySQL端口3307
 ├── .gitignore
 │
-├── backend/                           # Python FastAPI 后端
-│   ├── requirements.txt
-│   ├── alembic.ini                    # 数据库迁移配置
-│   ├── alembic/
-│   │   └── versions/                  # 迁移脚本
+├── backend/                                 # Python FastAPI 后端
+│   ├── requirements.txt                     # 28个依赖包，与CLAUDE.md一致
 │   ├── app/
-│   │   ├── main.py                    # FastAPI入口
-│   │   ├── config.py                  # 配置管理（读.env）
-│   │   ├── dependencies.py            # 依赖注入
+│   │   ├── main.py                          # FastAPI入口 + CORS + 8路由注册
+│   │   ├── config.py                        # pydantic-settings 读 .env
+│   │   ├── dependencies.py                  # SparkClient + LangGraph 图单例
 │   │   │
-│   │   ├── api/                       # API路由层
+│   │   ├── api/                             # ✅ 8个路由模块全部就绪
 │   │   │   ├── __init__.py
-│   │   │   ├── auth.py                # 登录注册
-│   │   │   ├── chat.py                # SSE流式对话（核心）
-│   │   │   ├── profile.py             # 学习画像CRUD
-│   │   │   ├── resource.py            # 资源管理
-│   │   │   ├── assessment.py          # 评估报告
-│   │   │   └── learning_path.py       # 学习路径
+│   │   │   ├── auth.py                      # 注册/登录/me (JWT)
+│   │   │   ├── chat.py                      # SSE流式对话（核心）+ 线程桥接
+│   │   │   ├── profile.py                   # 画像CRUD
+│   │   │   ├── resources.py                 # 资源列表+详情
+│   │   │   ├── assessment.py                # 答题提交+记录+报告
+│   │   │   ├── learning_path.py             # 路径查询
+│   │   │   ├── conversation.py              # 对话历史
+│   │   │   └── admin.py                     # 教材上传 + 知识库统计
 │   │   │
-│   │   ├── agents/                    # LangGraph Agent层（核心）
+│   │   ├── agents/                          # LangGraph 6 Agent ✅
 │   │   │   ├── __init__.py
-│   │   │   ├── supervisor.py          # 调度Agent（主控节点）
-│   │   │   ├── state.py               # 共享状态定义
-│   │   │   ├── profile_agent.py       # 画像Agent
-│   │   │   ├── resource_agent.py      # 资源生成Agent
-│   │   │   ├── question_agent.py      # 出题Agent
-│   │   │   ├── path_agent.py          # 路径规划Agent
-│   │   │   └── evaluation_agent.py    # 评估反馈Agent
+│   │   │   ├── supervisor.py                # 调度Agent（意图分类→路由）
+│   │   │   ├── state.py                     # AgentState 共享状态定义
+│   │   │   ├── profile_agent.py             # 画像Agent（6维对话采集+MySQL持久化）
+│   │   │   ├── resource_agent.py            # 资源Agent（5种资源+RAG检索注入）
+│   │   │   ├── question_agent.py            # 出题Agent（BKT自适应难度+题库检索）
+│   │   │   ├── path_agent.py                # 路径Agent（KG拓扑+艾宾浩斯复习）
+│   │   │   ├── evaluation_agent.py          # 评估Agent（6维评估+BKT数据）
+│   │   │   └── core/                        # Agent核心（空目录，预留）
 │   │   │
-│   │   ├── models/                    # SQLAlchemy ORM模型
+│   │   ├── models/                          # ORM模型 ✅ 7张表
 │   │   │   ├── __init__.py
-│   │   │   ├── user.py
-│   │   │   ├── profile.py
-│   │   │   ├── resource.py
-│   │   │   └── assessment.py
+│   │   │   ├── user.py                      # 用户表
+│   │   │   ├── profile.py                   # 学习画像表（6维+JSON字段）
+│   │   │   ├── resource.py                  # 学习资源表
+│   │   │   ├── assessment.py                # 评估报告表
+│   │   │   ├── learning_path.py             # 学习路径表
+│   │   │   ├── conversation.py              # 对话历史表
+│   │   │   └── answer_record.py             # 答题记录表
 │   │   │
-│   │   ├── schemas/                   # Pydantic请求/响应模型
+│   │   ├── schemas/                         # Pydantic 请求/响应 ✅
 │   │   │   ├── __init__.py
-│   │   │   ├── chat.py
-│   │   │   ├── profile.py
-│   │   │   └── resource.py
+│   │   │   ├── auth.py                      # RegisterRequest/LoginRequest/TokenResponse
+│   │   │   ├── profile.py                   # ProfileUpdate/ProfileResponse
+│   │   │   ├── resource.py                  # ResourceListResponse/DetailResponse
+│   │   │   ├── assessment.py                # AssessmentResponse
+│   │   │   └── path.py                      # PathResponse
 │   │   │
-│   │   ├── services/                  # 业务逻辑层
+│   │   ├── services/                        # 业务服务层 ✅
 │   │   │   ├── __init__.py
-│   │   │   ├── spark_client.py        # 讯飞星火API封装
-│   │   │   ├── embedding_service.py   # Embedding服务（BGE）
-│   │   │   ├── rag_service.py         # RAG检索+防幻觉校验
-│   │   │   └── resource_service.py    # 资源管理服务
+│   │   │   ├── spark_client.py              # 讯飞星火WS客户端(HMAC签名+流式/同步双模式)
+│   │   │   ├── rag_service.py               # 混合检索(FAISS稠密+BM25稀疏+RRF融合+CrossEncoder精排)
+│   │   │   ├── bkt_service.py               # 贝叶斯知识追踪(BKT四参数模型)
+│   │   │   ├── knowledge_graph.py           # 知识点图谱+拓扑排序+时间估算
+│   │   │   ├── review_scheduler.py          # 艾宾浩斯遗忘曲线复习调度
+│   │   │   ├── faiss_client.py              # FAISS 多子索引管理(按学科分)
+│   │   │   └── document_parser.py           # 文档解析(PDF+OCR+Word+Markdown)
 │   │   │
-│   │   ├── core/                      # 核心基础设施
+│   │   ├── core/                            # 核心基础设施 ✅
 │   │   │   ├── __init__.py
-│   │   │   ├── database.py            # MySQL连接
-│   │   │   ├── redis_client.py        # Redis连接
-│   │   │   ├── chroma_client.py       # ChromaDB连接
-│   │   │   ├── minio_client.py        # MinIO连接
-│   │   │   └── security.py            # JWT+密码哈希
+│   │   │   ├── database.py                  # SQLAlchemy引擎+会话工厂
+│   │   │   ├── chroma_client.py             # ChromaDB HTTP客户端(单例+集合缓存)
+│   │   │   └── security.py                  # JWT+bcrypt密码哈希
 │   │   │
-│   │   └── utils/                     # 工具函数
-│   │       ├── __init__.py
-│   │       └── markdown_utils.py      # Markdown→思维导图转换
+│   │   └── scripts/                         # 知识库素材脚本
+│   │       └── knowledge_materials/          # 教材/题库文件目录
 │   │
-│   └── tests/                         # 后端测试
-│       ├── conftest.py
-│       ├── test_agents/
-│       └── test_api/
+│   └── tests/                               # ❌ 测试目录为空
 │
-├── frontend/                          # Vue3 前端
-│   ├── package.json
+├── frontend/                                # Vue3 + TypeScript 前端
+│   ├── package.json                         # 14个依赖包
 │   ├── vite.config.ts
 │   ├── index.html
 │   ├── src/
-│   │   ├── main.ts
-│   │   ├── App.vue
-│   │   ├── router/
-│   │   │   └── index.ts              # 路由配置
-│   │   ├── stores/                   # Pinia状态管理
-│   │   │   ├── user.ts               # 用户状态
-│   │   │   ├── chat.ts               # 对话状态
-│   │   │   └── learning.ts          # 学习状态
-│   │   ├── api/                      # 后端API调用封装
-│   │   │   ├── index.ts              # axios实例
-│   │   │   ├── chat.ts               # SSE流式对话
-│   │   │   ├── auth.ts
-│   │   │   └── resource.ts
-│   │   ├── views/                    # 页面组件
-│   │   │   ├── Login.vue
-│   │   │   ├── Dashboard.vue         # 学习仪表盘（首页）
-│   │   │   ├── ChatView.vue          # Agent对话界面（核心）
-│   │   │   ├── ProfileView.vue       # 学习画像展示
-│   │   │   ├── ResourceView.vue      # 资源库浏览
-│   │   │   ├── AssessmentView.vue    # 评估报告
-│   │   │   └── LearningPathView.vue  # 学习路径可视化
-│   │   ├── components/               # 可复用组件
+│   │   ├── main.ts                          # Vue3入口(Pinia+Router+ElementPlus全局图标)
+│   │   ├── App.vue                          # 纯 <router-view/>
+│   │   ├── router/index.ts                  # 7页面路由(懒加载)
+│   │   ├── stores/                          # Pinia状态管理
+│   │   │   ├── chat.ts                      # ✅ 对话状态(消息列表+流式+Agent切换)
+│   │   │   ├── user.ts                      # ❌ 不存在
+│   │   │   └── learning.ts                  # ❌ 不存在
+│   │   ├── api/                             # 前端API封装
+│   │   │   ├── index.ts                     # ✅ axios实例(JWT拦截器+401跳转)
+│   │   │   ├── chat.ts                      # ✅ SSE流式请求(fetch手动解析)
+│   │   │   ├── auth.ts                      # ❌ 不存在
+│   │   │   ├── profile.ts                   # ❌ 不存在
+│   │   │   └── resource.ts                  # ❌ 不存在
+│   │   ├── views/                           # 页面组件 (7个全部存在)
+│   │   │   ├── Login.vue                    # 登录/注册 (功能可用)
+│   │   │   ├── Dashboard.vue                # ⚠️ 全部硬编码假数据
+│   │   │   ├── ChatView.vue                 # SSE流式对话+Agent切换 (核心可用)
+│   │   │   ├── ProfileView.vue              # 6维画像展示+编辑
+│   │   │   ├── ResourceView.vue             # ⚠️ 仅有列表无详情
+│   │   │   ├── AssessmentView.vue           # ⚠️ 环形图数据硬编码
+│   │   │   └── LearningPathView.vue         # ⚠️ 仅Markdown无DAG图
+│   │   ├── components/
 │   │   │   ├── chat/
-│   │   │   │   ├── ChatMessage.vue   # 消息气泡（支持Markdown）
-│   │   │   │   ├── ChatInput.vue     # 输入框（支持附件）
-│   │   │   │   └── StreamingText.vue # SSE流式文字渲染
+│   │   │   │   ├── ChatMessage.vue          # ✅ Markdown渲染消息气泡
+│   │   │   │   ├── ChatInput.vue            # ✅ 输入框(Enter发送/Shift+Enter换行)
+│   │   │   │   └── StreamingText.vue        # ❌ 不存在
 │   │   │   ├── resource/
-│   │   │   │   ├── ResourceCard.vue  # 资源卡片
-│   │   │   │   └── MindMap.vue       # 思维导图组件（markmap）
+│   │   │   │   ├── ResourceCard.vue         # ❌ 不存在
+│   │   │   │   └── MindMap.vue              # ❌ 不存在(markmap已装但未创建)
 │   │   │   ├── assessment/
-│   │   │   │   ├── RadarChart.vue    # 6维雷达图
-│   │   │   │   └── ScoreBoard.vue    # 成绩面板
+│   │   │   │   ├── RadarChart.vue           # ❌ 不存在
+│   │   │   │   └── ScoreBoard.vue           # ❌ 不存在
 │   │   │   └── common/
-│   │   │       └── AppLayout.vue     # 通用布局（侧边栏+顶栏）
+│   │   │       └── AppLayout.vue            # ✅ 侧边栏+顶栏布局
 │   │   └── styles/
-│   │       └── global.css
+│   │       └── global.css                   # ✅ 完整设计系统(CSS变量+动画)
 │   └── public/
-│       └── favicon.ico
 │
-└── docs/                              # 比赛文档产出
-    ├── 需求分析文档.md
-    ├── 技术设计文档.md
-    ├── 测试报告.md
-    └── 演示脚本.md
+└── docs/                                    # 项目文档
+    ├── 操作手册.md                           # Git/Docker/开发操作速查
+    ├── RAG设计思路详解.md                    # RAG 从概念到实现完整讲解
+    ├── 教材台账_72本完整目录.md              # 知识库建设参考清单
+    ├── knowledge_graph.json                  # 知识图谱数据
+    ├── rag_evaluation_report.json            # RAG 评测数据
+    ├── 需求分析文档.md                       (待写 - P3)
+    ├── 技术设计文档.md                       (待写 - P3)
+    ├── 测试报告.md                           (待写 - P3)
+    └── 演示脚本.md                           (待写 - P3)
 ```
 
 ---
@@ -318,14 +363,15 @@ CREATE TABLE assessment_reports (
 );
 ```
 
-### ChromaDB 集合设计
+### ChromaDB 集合设计（实际使用）
 
 | 集合名 | 存储内容 | Embedding模型 | 用途 |
 |------|------|------|------|
-| `knowledge_base` | 教材/课件文本切片 | BGE-large-zh | RAG知识检索 |
-| `resource_embeddings` | 生成的学习资源摘要 | BGE-large-zh | 资源语义搜索 |
-| `question_bank` | 题库题目+答案+解析 | BGE-large-zh | 相似题检索 |
-| `error_patterns` | 常见错误模式向量 | BGE-large-zh | 错误模式聚类 |
+| `knowledge_base` | 教材/课件文本切片 | BGE-M3 (dense) | RAG知识检索 |
+| `exercise_bank` | 题库题目+答案+解析 | BGE-M3 | 相似题检索 |
+
+> 注：Embedding 实际使用 BAAI/bge-m3（配置中默认值），重排序使用 BAAI/bge-reranker-v2-m3。
+> 向量索引优先使用 FAISS 多子索引（按学科分），ChromaDB 作为降级方案。
 
 ### Redis 键设计
 
@@ -350,37 +396,22 @@ resource_queue                 → List   (FIFO队列)
 
 ## 五、多智能体架构设计（LangGraph）
 
-### State 定义（共享状态）
+### State 定义（实际代码，`agents/state.py`）
 
 ```python
-from typing import TypedDict, List, Optional, Annotated
+from typing import TypedDict, Annotated, Optional
 from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage
 
 class AgentState(TypedDict):
-    # 消息历史（自动追加）
-    messages: Annotated[List[BaseMessage], add_messages]
-
-    # 当前激活的Agent
-    current_agent: str              # "supervisor" | "profile" | "resource" | ...
-
-    # 路由决策
-    next_agent: Optional[str]       # Supervisor决定下一个调用誰
-
-    # 用户画像（从MySQL加载，Agent更新）
-    user_profile: Optional[dict]
-
-    # 当前上下文
-    context: dict                   # {"topic": "Python基础", "task": "生成资源", ...}
-
-    # 各Agent的输出缓存（避免重复生成）
-    agent_outputs: dict             # {"profile_agent": {...}, "resource_agent": {...}}
-
-    # 流式输出缓冲区
-    stream_buffer: str              # SSE推送给前端的增量文本
-
-    # 用户ID（从JWT解析）
-    user_id: int
+    messages: Annotated[list[BaseMessage], add_messages]  # 消息历史（LangGraph自动追加）
+    current_agent: str                                     # 当前激活Agent标识
+    next_agent: Optional[str]                              # Supervisor的路由决策
+    user_profile: Optional[dict]                           # 6维学习画像（从MySQL加载）
+    context: dict                                          # 当前对话上下文 {"topic": "...", ...}
+    agent_outputs: dict                                    # 各Agent输出缓存（避免重复生成）
+    stream_buffer: str                                     # SSE流式输出缓冲区
+    user_id: int                                           # 当前用户ID（从JWT解析）
 ```
 
 ### Supervisor（调度Agent）路由逻辑
@@ -666,7 +697,7 @@ JWT_ALGORITHM=HS256
 JWT_EXPIRE_MINUTES=1440
 
 # BGE Embedding
-EMBEDDING_MODEL=BAAI/bge-large-zh-v1.5
+EMBEDDING_MODEL=BAAI/bge-m3
 EMBEDDING_DEVICE=cpu   # 或 cuda（有GPU的话）
 ```
 
@@ -675,7 +706,7 @@ EMBEDDING_DEVICE=cpu   # 或 cuda（有GPU的话）
 ## 七、Docker Compose（一键启动基础设施）
 
 ```yaml
-# docker-compose.yml
+# docker-compose.yml（实际文件）
 version: "3.8"
 services:
   mysql:
@@ -687,7 +718,7 @@ services:
       MYSQL_USER: a3_user
       MYSQL_PASSWORD: a3_pass
     ports:
-      - "3306:3306"
+      - "3307:3306"          # 注意：宿主机3307→容器3306
     volumes:
       - mysql_data:/var/lib/mysql
       - ./backend/alembic/init.sql:/docker-entrypoint-initdb.d/init.sql
@@ -712,7 +743,7 @@ services:
       - minio_data:/data
 
   chromadb:
-    image: chromadb/chroma:latest
+    image: chromadb/chroma:0.5.20
     container_name: a3-chromadb
     ports:
       - "8000:8000"
@@ -733,25 +764,34 @@ docker-compose up -d
 
 ---
 
-## 八、API路由设计
+## 八、API路由设计（已实现）
 
-| 方法 | 路径 | 说明 | 流式 |
-|------|------|------|:--:|
-| POST | `/api/auth/register` | 注册 | |
-| POST | `/api/auth/login` | 登录（返回JWT） | |
-| GET | `/api/auth/me` | 获取当前用户信息 | |
-| POST | `/api/chat/send` | 发送消息（核心接口） | ✅ SSE |
-| GET | `/api/chat/history?conversation_id=` | 获取对话历史 | |
-| GET | `/api/profile/me` | 获取学习画像 | |
-| PUT | `/api/profile/me` | 更新学习画像 | |
-| GET | `/api/resources?type=&page=&size=` | 获取资源列表 | |
-| GET | `/api/resources/{id}` | 获取资源详情 | |
-| POST | `/api/resources/generate` | 手动触发资源生成 | |
-| POST | `/api/assessment/start` | 开始一次评估测试 | |
-| POST | `/api/assessment/submit` | 提交答题结果 | |
-| GET | `/api/assessment/report/{id}` | 获取评估报告 | |
-| GET | `/api/path/current` | 获取当前学习路径 | |
-| POST | `/api/path/plan` | 生成/更新学习路径 | |
+| 方法 | 路径 | 说明 | 认证 | 流式 |
+|------|------|------|:--:|:--:|
+| POST | `/api/auth/register` | 注册（返回JWT） | | |
+| POST | `/api/auth/login` | 登录（返回JWT） | | |
+| GET | `/api/auth/me` | 获取当前用户信息 | ✅ | |
+| POST | `/api/chat/send` | 发送消息（核心接口） | 可选 | ✅ SSE |
+| GET | `/api/chat/history` | 获取对话历史 | ✅ | |
+| GET | `/api/profile/me` | 获取学习画像（无画像自动创建） | ✅ | |
+| PUT | `/api/profile/me` | 更新学习画像 | ✅ | |
+| GET | `/api/resources?type=&page=&size=` | 获取资源列表 | ✅ | |
+| GET | `/api/resources/{id}` | 获取资源详情（含content） | ✅ | |
+| POST | `/api/assessment/submit` | 提交答题结果 | ✅ | |
+| GET | `/api/assessment/records` | 答题记录列表 | ✅ | |
+| GET | `/api/assessment/reports` | 评估报告列表 | ✅ | |
+| GET | `/api/assessment/reports/{id}` | 评估报告详情 | ✅ | |
+| GET | `/api/path/current` | 获取当前活跃学习路径 | ✅ | |
+| POST | `/api/admin/upload` | 上传教材（PDF/Word/MD）→入库 | ✅ | |
+| GET | `/api/admin/stats` | 知识库统计 | ✅ | |
+| GET | `/api/health` | 健康检查 | | |
+
+### 待补充的接口
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/assessment/batch-submit` | 批量提交答题（支持完整测试流程） |
+| PUT | `/api/path/current` | 更新学习路径节点（标记完成/暂停） |
+| POST | `/api/resources/generate` | 手动触发资源生成 |
 
 ### SSE 流式对话响应格式
 
@@ -777,113 +817,115 @@ data: {"total_tokens": 1234, "agents_used": ["supervisor", "resource_agent"]}
 
 ---
 
-## 九、前端路由与组件树
+## 九、前端路由与组件树（实际状态）
 
-### 路由设计
+### 路由设计（已实现）
 
 ```
-/login                    → Login.vue           （登录注册页）
-/dashboard                → Dashboard.vue       （学习仪表盘首页）
-/chat                     → ChatView.vue        （Agent对话 - 核心页面）
-/chat/:conversation_id    → ChatView.vue        （历史对话）
-/profile                  → ProfileView.vue     （学习画像）
-/resources                → ResourceView.vue    （资源库）
-/resources/:id            → ResourceView.vue    （资源详情）
-/assessment               → AssessmentView.vue  （评估报告）
-/learning-path            → LearningPathView.vue（学习路径）
+/login                    → Login.vue           ✅ 登录注册页
+/dashboard                → Dashboard.vue       ⚠️ 数据硬编码
+/chat                     → ChatView.vue        ✅ SSE流式+Agent切换
+/profile                  → ProfileView.vue     ✅ 6维展示+编辑
+/resources                → ResourceView.vue    ⚠️ 仅列表
+/assessment               → AssessmentView.vue  ⚠️ 数据硬编码
+/learning-path            → LearningPathView.vue ⚠️ 无DAG图
 ```
 
-### 核心组件：ChatView.vue（对话界面）
+### ChatView.vue 实际组件树
 
 ```
 ChatView.vue
-├── 左侧：对话列表（历史会话）
-│   └── ConversationList.vue
-├── 中间：对话区
-│   ├── MessageList.vue         （消息列表，自动滚动到底部）
-│   │   ├── ChatMessage.vue     （单条消息，支持Markdown渲染）
-│   │   │   ├── 文字内容（marked渲染）
-│   │   │   ├── 思维导图（markmap组件）
-│   │   │   ├── 代码块（highlight.js）
-│   │   │   └── 资源卡片（ResourceCardInline.vue）
-│   │   └── StreamingText.vue   （SSE流式打字效果）
-│   └── ChatInput.vue           （底部输入框，支持Shift+Enter换行）
-└── 右侧：上下文面板（可选折叠）
-    ├── 当前画像摘要
-    ├── 关联资源推荐
-    └── 学习进度条
+├── 消息列表（自动滚动）
+│   ├── ChatMessage.vue     ✅ Markdown渲染（marked）
+│   ├── Agent切换标签       ✅ Supervisor→资源Agent切换提示
+│   └── StreamingText.vue   ❌ 未实现（内容直接append，无打字效果）
+├── 空状态引导               ✅ 首次进入提示
+└── ChatInput.vue           ✅ Enter发送/Shift+Enter换行
+
+缺少：
+- 左侧对话历史侧栏（API已就绪，前端未做）
+- 右侧上下文面板（画像摘要/资源推荐）
+- 思维导图内嵌渲染
+- 资源卡片内嵌
 ```
 
-### Pinia Store 设计
+### Pinia Store 实际状态
 
 ```typescript
-// stores/chat.ts
+// stores/chat.ts ✅ 已实现
 interface ChatState {
-  conversations: Conversation[]
-  currentConversationId: number | null
-  messages: Message[]
-  isStreaming: boolean          // 是否正在接收SSE
-  currentAgent: string          // 当前活跃的Agent
-  agentOutputs: Record<string, any>  // 各Agent输出
+  messages: ChatMessage[]
+  isStreaming: boolean
+  currentAgent: string
+  // 方法：addUserMessage / startAssistantReply / appendToStreaming
+  //       setAgentSwitch / finishAssistantReply / clearMessages
 }
 
-// stores/user.ts
-interface UserState {
-  token: string | null
-  userInfo: User | null
-  profile: LearningProfile | null
-}
+// stores/user.ts ❌ 未创建 — 需要包含token/userInfo/profile
+// stores/learning.ts ❌ 未创建 — 需要包含resources/assessments/path
 ```
 
 ---
 
-## 十、实现路线图（按52天规划执行）
+## 十、当前任务计划（6.7 - 6.30，23天）
 
-### 第一阶段：调研验证（5.9 - 5.15）— 当前所在
-- [x] 5.9-10: 注册讯飞星火，跑通Hello World API调用
-- [ ] 5.10-11: 研读参考项目 `zzzlip/langgraph-AI-interview-agent`
-- [ ] 5.11-12: LangGraph Quick Start + Supervisor模式Tutorial
-- [ ] 5.13: ChromaDB Quick Start + Embedding检索
-- [ ] 5.14: 搭项目脚手架（Vue3 + FastAPI + Docker Compose）
-- [ ] 5.15: 里程碑1 - 技术验证通过
+> 基于 2026-06-07 代码审查结果制定。后端已超过省一标准，重点补齐前端数据层和比赛文档。
 
-### 第二阶段：MVP核心闭环（5.16 - 5.31）
-- [ ] 5.16-18: 画像Agent（对话采集 + 结构化存储 + 6维画像）
-- [ ] 5.19-21: 资源Agent（文档 + 思维导图，先做2种）
-- [ ] 5.22-24: 出题Agent（自适应出题 + 答案解析）
-- [ ] 5.25-27: 路径Agent（知识图谱 + DAG路径规划）
-- [ ] 5.28-29: 评估Agent（答题评估 + 雷达图）
-- [ ] 5.30-31: 调度Agent（串联5个Agent + 端到端调试）
-- [ ] 5.31: 里程碑2 - MVP闭环可演示
+### P0 — 前端数据层补全（6.7 当天）
 
-### 第三阶段：前端 + 体验（6.1 - 6.10）
-- [ ] 6.1-3: Vue3页面：Dashboard + ChatView
-- [ ] 6.4-5: SSE流式输出 + 资源卡片展示
-- [ ] 6.5-6: 学习路径DAG可视化
-- [ ] 6.7-8: 多模态答疑界面
-- [ ] 6.9-10: 全流程联调
-- [ ] 6.10: 里程碑3 - 前端体验闭环
+| # | 任务 | 优先级 | 预计 |
+|------|------|:--:|------|
+| 1 | 创建 `stores/user.ts` — JWT管理、用户信息、画像缓存 | 🔴 | 30min |
+| 2 | 创建 `stores/learning.ts` — 资源列表、评估数据、路径状态 | 🔴 | 30min |
+| 3 | 创建 `api/auth.ts` `api/profile.ts` `api/resource.ts` `api/assessment.ts` `api/path.ts` | 🔴 | 1h |
+| 4 | 重构 Dashboard.vue — 从 API 拉真实数据，统计+雷达图动态化 | 🔴 | 1h |
+| 5 | 重构 AssessmentView.vue — 环形图绑定评估报告真实数据 | 🔴 | 1h |
+| 6 | 实现 MindMap.vue — markmap 渲染思维导图 | 🔴 | 1h |
+| 7 | 实现 StreamingText.vue — 逐字打字机效果 | 🟡 | 30min |
+| 8 | 实现 ResourceDetail 页 — 按类型渲染（文档/导图/代码/题目） | 🔴 | 1.5h |
 
-### 第四阶段：加分项（6.11 - 6.20）
-- [ ] 6.11-12: RAG知识库（教材入库 + 防幻觉校验）
-- [ ] 6.13-14: 多模态资源（TTS + 动画）
-- [ ] 6.15-16: 评估系统升级（多维雷达 + 策略建议）
-- [ ] 6.17-18: 性能优化 + Docker化
-- [ ] 6.19-20: 安全加固 + 日志
+### P1 — 前端体验闭环（6.8 - 6.10）
 
-### 第五阶段：文档演示（6.21 - 6.29）
-- [ ] 6.21-23: 需求分析文档
-- [ ] 6.24-25: 技术设计文档
-- [ ] 6.25-26: 测试报告
-- [ ] 6.27-28: 演示视频录制
-- [ ] 6.28-29: PPT制作
-- [ ] 6.29: 最终审查
+| # | 任务 | 预计 |
+|------|------|------|
+| 9 | 对话历史侧栏 — ChatView 左侧 ConversationList | 1h |
+| 10 | LearningPathView DAG图 — vue-flow 渲染拓扑排序结果 | 2h |
+| 11 | 资源评分反馈 — 用户对生成资源打分 | 0.5h |
+| 12 | 全链路联调 — 注册→画像采集→对话→生成资源→评估→路径 | 2h |
+| 13 | 注入知识库 — Python/数据结构教材→向量化入库→验证检索 | 2h |
 
-### 提交（6.30）
+### P2 — 加分特性（6.11 - 6.20）
+
+| # | 任务 | 说明 |
+|------|------|------|
+| 14 | 评估测试闭环 | 前端出题→答题→自动批改→BKT更新→雷达图刷新 |
+| 15 | 知识库管理界面 | 前端上传教材、查看入库状态 |
+| 16 | Docker 部署化 | 前端 Dockerfile + 后端 Dockerfile + nginx 反代 |
+| 17 | 安全加固 | 请求限流(middleware)、操作日志 |
+| 18 | 响应式适配 | Dashboard/Profile 移动端适配 |
+
+### P3 — 比赛文档（6.21 - 6.29）
+
+| # | 文档 | 核心要点 |
+|------|------|------|
+| 19 | 需求分析文档 | 个性化学习痛点 → 6维画像 → 多Agent方案 |
+| 20 | 技术设计文档 | 架构图 + BKT算法 + 知识图谱拓扑排序 + 混合检索架构 |
+| 21 | 测试报告 | Agent准确率 + RAG检索精度 + SSE延迟 + 功能测试用例 |
+| 22 | 演示视频 | 用户注册→画像采集→对话学习→资源生成→评估报告 全流程 |
+| 23 | PPT制作 | 15页以内：背景/方案/创新点(BKT+KG+HybridRAG)/架构/演示/总结 |
+
+### P4 — 提交（6.30）
+
 - [ ] 08:00 最后检查
 - [ ] 10:00 上传作品
 - [ ] 14:00 确认提交成功
 - [ ] 15:00 截止
+
+---
+
+**当前进度追踪方式：**
+- 每完成一个任务，在对应的 `- [ ]` 前打勾改为 `- [x]`
+- 任务完成顺序：P0 → P1 → P2 → P3，不跳跃
 
 ---
 
@@ -892,17 +934,18 @@ interface UserState {
 > 如果这是全新的Claude Code会话，请按以下步骤快速恢复：
 
 ```
-1. 阅读本文件（CLAUDE.md）- Claude会自动加载
-2. 运行 git status 了解当前代码状态
-3. 检查 Docker 是否运行：docker ps
-4. 检查配置文件：cat .env （如果存在）
-5. 告诉我当前进度，我会告诉你下一步做什么
-6. 如果项目脚手架还没搭，从"第一阶段 5.14 搭项目脚手架"开始
+1. 阅读本文件（CLAUDE.md）- Claude 会自动加载
+2. 运行 docker ps 确认基础设施是否运行（4个容器应全部Up）
+3. 阅读"一、项目当前状态"了解整体进度
+4. 阅读"十、当前任务计划"找到 P0-P3 待办事项
+5. 根据 P0→P1→P2→P3 优先级顺序，从第一个未勾选的任务开始执行
 ```
 
-**当前进度追踪方式：**
-- 每完成一个任务，我会在对应的 `- [ ]` 前打勾改为 `- [x]`
-- 下一个会话的Claude读取此文件就能知道做到哪里了
+**重要上下文：**
+- 后端已完成 95%，质量很高。BKT+知识图谱+混合检索是三个自研算法亮点
+- 前端页面骨架都已完成，当前重点是补数据层和缺失组件
+- .env 已配置讯飞星火 Key，MySQL 端口 3307
+- 启动方式：`docker-compose up -d` → `cd backend && uvicorn app.main:app --reload --port 8000` → `cd frontend && npm run dev`
 
 ---
 
@@ -917,10 +960,13 @@ interface UserState {
 | FastAPI文档 | https://fastapi.tiangolo.com/ |
 | Element Plus文档 | https://element-plus.org/ |
 | 参考项目（2025二等奖） | https://github.com/zzzlip/langgraph-AI-interview-agent |
-| BGE模型 | https://huggingface.co/BAAI/bge-large-zh-v1.5 |
+| BGE-M3模型 | https://huggingface.co/BAAI/bge-m3 |
+| BGE-Reranker | https://huggingface.co/BAAI/bge-reranker-v2-m3 |
 | markmap（思维导图） | https://markmap.js.org/ |
 | Vue Flow（DAG图） | https://vueflow.dev/ |
-| Docker Desktop下载 | https://www.docker.com/products/docker-desktop/ |
+| FAISS | https://github.com/facebookresearch/faiss |
+| PaddleOCR | https://github.com/PaddlePaddle/PaddleOCR |
+| BKT 理论参考 | Corbett & Anderson (1995), "Knowledge Tracing" |
 
 ---
 
@@ -929,38 +975,44 @@ interface UserState {
 ```bash
 # ===== 首次搭建（Windows PowerShell）=====
 
-# 1. 克隆参考项目研读
-git clone https://github.com/zzzlip/langgraph-AI-interview-agent.git /tmp/reference-project
-
-# 2. 创建项目目录
-mkdir a3-learning-system
+# 1. 进入项目目录
 cd a3-learning-system
 
-# 3. 启动基础设施
+# 2. 启动基础设施（MySQL:3307, Redis, MinIO:9000/9001, ChromaDB:8000）
 docker-compose up -d
 
+# 3. 验证基础设施
+docker ps  # 4个容器都应显示 Up
+
 # 4. 后端
+cd backend
 python -m venv venv
 venv\Scripts\activate
-pip install -r backend/requirements.txt
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
 
-# 5. 初始化数据库
-cd backend
-alembic upgrade head
-
-# 6. 前端
-cd ../frontend
+# 5. 前端（新终端）
+cd frontend
 npm install
 npm run dev
-
-# 7. 后端启动
-cd ../backend
-uvicorn app.main:app --reload --port 8000
 
 # ===== 验证服务 =====
 # 后端API文档: http://localhost:8000/docs
 # 前端页面: http://localhost:5173
 # MinIO控制台: http://localhost:9001
+# 健康检查: curl http://localhost:8000/api/health
+```
+
+### 日常开发启动（基础设施已运行）
+
+```bash
+# 后端
+cd a3-learning-system/backend
+uvicorn app.main:app --reload --port 8000
+
+# 前端（另一个终端）
+cd a3-learning-system/frontend
+npm run dev
 ```
 
 ---
@@ -998,19 +1050,25 @@ uvicorn app.main:app --reload --port 8000
 ## 附录C：常见问题
 
 **Q: 讯飞星火API调用失败？**
-A: 检查3个值：APP_ID、API_KEY、API_SECRET。注意API_SECRET不同于API_KEY。
+A: 检查 .env 中 3 个值：SPARK_APP_ID、SPARK_API_KEY、SPARK_API_SECRET。注意 API_SECRET ≠ API_KEY。
 
-**Q: ChromaDB连接失败？**
-A: 确保Docker的chromadb容器在运行：`docker-compose up -d chromadb`
+**Q: ChromaDB 连接失败？**
+A: Docker chromadb 容器使用镜像 `chromadb/chroma:0.5.20`，端口 8000。`docker-compose up -d chromadb`
 
-**Q: BGE模型下载慢？**
-A: 设置HuggingFace镜像：
-```bash
-export HF_ENDPOINT=https://hf-mirror.com
-```
+**Q: FAISS 导入失败？**
+A: `pip install faiss-cpu`。FAISS 用于稠密向量检索，不可用时自动降级到 ChromaDB。
 
-**Q: LangGraph图不执行？**
-A: 检查checkpointer是否正确配置，每次调用需要传thread_id。
+**Q: BGE 模型下载慢？**
+A: 设置 HuggingFace 镜像：`export HF_ENDPOINT=https://hf-mirror.com`。首次运行会下载 BGE-M3 (~2GB) 和 BGE-Reranker (~1GB)。
+
+**Q: LangGraph 图不执行？**
+A: 检查 checkpointer (MemorySaver) 是否正确配置，每次调用需要传 `config={"configurable": {"thread_id": "..."}}`。
+
+**Q: MySQL 连接失败？**
+A: MySQL 端口映射为 3307→3306（不是默认的 3306），检查 .env 中 `MYSQL_PORT=3307`。
+
+**Q: 前端 npm run dev 报错？**
+A: 确保 `npm install` 已完成。Vite 默认端口 5173，需在 vite.config.ts 中配置代理到后端 8000。
 
 ---
 

@@ -32,9 +32,24 @@ if settings.hf_mirror:
     os.environ["HF_ENDPOINT"] = settings.hf_mirror
 
 from huggingface_hub import configure_http_backend
-from sentence_transformers import SentenceTransformer, CrossEncoder
-
 from app.core.chroma_client import add_to_collection, search_in_collection
+
+# Lazy import: sentence_transformers depends on torch which may not be available
+SentenceTransformer = None
+CrossEncoder = None
+
+def _lazy_import_st():
+    """Lazily import sentence_transformers (depends on torch, may fail on some systems)"""
+    global SentenceTransformer, CrossEncoder
+    if SentenceTransformer is not None:
+        return True
+    try:
+        from sentence_transformers import SentenceTransformer as _ST, CrossEncoder as _CE
+        SentenceTransformer = _ST
+        CrossEncoder = _CE
+        return True
+    except ImportError:
+        return False
 
 warnings.filterwarnings("ignore")
 
@@ -70,7 +85,7 @@ EXERCISE_COLLECTION = "exercise_bank"
 # 模型加载
 # ============================================================
 
-def _get_dense_model() -> SentenceTransformer | None:
+def _get_dense_model():
     """BGE-M3 稠密向量模型（优先本地路径，带重试机制）
 
     加载策略：
@@ -79,6 +94,8 @@ def _get_dense_model() -> SentenceTransformer | None:
 
     说明：单次请求失败不会永久跳过 RAG，下次请求会重新尝试加载。
     """
+    if not _lazy_import_st():
+        return None
     global _dense_model, _embed_ready
     if _dense_model is None and not _embed_ready:
         model_name = getattr(settings, 'embedding_model', 'BAAI/bge-m3')
@@ -117,8 +134,10 @@ def _get_dense_model() -> SentenceTransformer | None:
     return _dense_model
 
 
-def _get_reranker() -> CrossEncoder:
+def _get_reranker():
     """BGE-Reranker-v2-m3 交叉编码器（精排用）"""
+    if not _lazy_import_st():
+        return None
     global _reranker
     if _reranker is None:
         reranker_name = "BAAI/bge-reranker-v2-m3"

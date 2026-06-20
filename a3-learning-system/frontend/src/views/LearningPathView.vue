@@ -165,6 +165,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import * as echarts from 'echarts'
 import api from '@/api/index'
+import { useUserStore } from '@/stores/user'
 
 // ═══════════ Types ═══════════
 interface KGNode {
@@ -228,7 +229,7 @@ function statusLabel(s: string) {
   return m[s] || s
 }
 function nodeColor(s: string) {
-  const m: Record<string,string> = { mastered:'#1D4ED8', learning:'#2563EB', familiar:'#60A5FA', beginner:'#93C5FD', unknown:'#94A3B8' }
+  const m: Record<string,string> = { mastered:'#10B981', learning:'#2563EB', familiar:'#F59E0B', beginner:'#8B5CF6', unknown:'#94A3B8' }
   return m[s] || '#94A3B8'
 }
 function nodeSize(s: string): number {
@@ -303,10 +304,10 @@ function renderGraph() {
 
   // 类别定义（用于着色和 Legend—5 级 BKT 掌握度）
   const categories = [
-    { name: '精通', itemStyle: { color: '#1D4ED8' } },
+    { name: '精通', itemStyle: { color: '#10B981' } },
     { name: '熟悉', itemStyle: { color: '#2563EB' } },
-    { name: '学习中', itemStyle: { color: '#60A5FA' } },
-    { name: '入门', itemStyle: { color: '#93C5FD' } },
+    { name: '学习中', itemStyle: { color: '#F59E0B' } },
+    { name: '入门', itemStyle: { color: '#8B5CF6' } },
     { name: '未学习', itemStyle: { color: '#94A3B8' } },
   ]
 
@@ -409,8 +410,8 @@ function handleGraphData(graph: any) {
   // Backend now returns: name, id, p_known, level, label_zh, color, size, phase
   const mergedNodes: KGNode[] = rawNodes.map((n: any) => {
     const name = n.name || n.id || `node_${Math.random()}`
+    const nodeId = n.id || name  // v4: 保留 KG id（如 py:env）用于边匹配
     const pKnown: number = typeof n.p_known === 'number' ? n.p_known : 0
-    // 直接使用后端返回的 level（基于 BKT p_known 正确阈值映射）
     const level = n.level || 'unknown'
     const apiColor = n.color || '#94A3B8'
     const apiSize = n.size || 16
@@ -418,7 +419,7 @@ function handleGraphData(graph: any) {
     const phase = n.phase || ''
 
     return {
-      id: name,
+      id: nodeId,
       label: name,
       status: level as KGNode['status'],
       labelZh,
@@ -467,14 +468,40 @@ function handleGraphData(graph: any) {
 }
 
 // ═══════════ 阶段计算（拓扑排序） ═══════════
-function computePhases() {
-  const inDegree: Record<string, number> = {}
-  nodes.value.forEach(n => { inDegree[n.id] = n.deps.length })
-  const remaining = new Set(nodes.value.map(n => n.id))
-  const result: Phase[] = []
-  let phaseNum = 1
+// Phase order & labels from KG v2 files
+const PHASE_ORDER: Record<string, number> = { foundation: 1, core: 2, advanced: 3, practice: 4 }
+const PHASE_LABELS: Record<string, string> = { foundation: '入门基础', core: '核心能力', advanced: '进阶深入', practice: '工程实战' }
+const PHASE_COLORS: Record<string, string> = { foundation: '#3B82F6', core: '#10B981', advanced: '#F59E0B', practice: '#8B5CF6' }
 
-  while (remaining.size > 0) {
+function computePhases() {
+  // Use user's actual weekly_hours from profile, fallback to 10
+  const userStore = useUserStore()
+  const weeklyHours = userStore.profile?.weekly_hours || 10
+  // Group nodes by KG phase field (v2 KG files define proper phase progression)
+  const groups: Record<string, KGNode[]> = {}
+  nodes.value.forEach(n => {
+    const p = n.phase || 'core'
+    if (!groups[p]) groups[p] = []
+    groups[p].push(n)
+  })
+  const ordered = Object.entries(groups).sort((a, b) => (PHASE_ORDER[a[0]] || 99) - (PHASE_ORDER[b[0]] || 99))
+  phases.value = ordered.map(([pid, nodeList]) => ({
+    title: PHASE_LABELS[pid] || pid,
+    nodes: nodeList.map(n => ({ label: n.label, status: n.status })),
+    estimatedHours: nodeList.length * 3,
+    estimatedWeeks: Math.max(1, Math.round(nodeList.length * 3 / weeklyHours)),
+    done: false, current: false,
+  }))
+  return
+
+  // --- deprecated: old topological sort ---
+  const _inDegree: Record<string, number> = {}
+  nodes.value.forEach(n => { _inDegree[n.id] = n.deps.length })
+  const _remaining = new Set(nodes.value.map(n => n.id))
+  const _result: Phase[] = []
+  let _phaseNum = 1
+
+  while (_remaining.size > 0) {
     const current = [...remaining].filter(id => inDegree[id] === 0)
     if (current.length === 0) break
 
@@ -582,7 +609,7 @@ onBeforeUnmount(() => {
 }
 .kg-domain-badge {
   display: inline-block;
-  background: linear-gradient(135deg, #EFF6FF, #DBEAFE);
+  background: #EFF6FF;
   color: #1D4ED8;
   padding: 3px 12px;
   border-radius: 20px;
@@ -669,9 +696,7 @@ onBeforeUnmount(() => {
   border: 1px solid var(--border-color);
   border-radius: 12px;
   overflow: hidden;
-  background:
-    radial-gradient(circle at 50% 50%, rgba(59,130,246,0.03) 0%, transparent 70%),
-    var(--bg-card);
+  background: var(--bg-card);
 }
 .kg-chart {
   width: 100%;

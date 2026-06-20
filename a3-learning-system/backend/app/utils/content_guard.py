@@ -116,21 +116,29 @@ class ContentGuard:
     def hallucination_check(self, text: str) -> tuple[bool, Optional[str]]:
         """检测生成的文本是否存在幻觉（编造不存在的事实）
 
-        教育领域内容：仅记录警告，不阻断（避免误判正常教学文本）
+        分级处理：
+        - 伪造引用/URL → 始终阻断（严重幻觉）
+        - 伪造函数名 → 教育内容仅警告，非教育内容阻断
         """
         if not text:
             return True, None
 
-        # 教育领域白名单：仅 warn 不 block
         is_edu = self.is_education_domain(text)
+        # 总是阻断的严重幻觉模式
+        CRITICAL_PATTERNS = {"伪造学术引用", "伪造外部URL"}
 
         for pattern, desc in self._compiled_hallucination:
             match = pattern.search(text)
             if match:
                 detail = match.group(1) if match.groups() else match.group(0)
+                if desc in CRITICAL_PATTERNS:
+                    # 伪造引用/URL → 无论什么领域都阻断
+                    logger.warning("ContentGuard: 严重幻觉阻断 '%s': %s", desc, detail[:80])
+                    return False, f"内容审核：{desc} '{detail[:60]}'，请验证信息准确性。"
                 if is_edu:
+                    # 教育内容的伪造函数名 → 仅警告
                     logger.info("ContentGuard: 教育领域疑似幻觉(仅warn): %s: %s", desc, detail[:80])
-                    return True, None  # 教育内容不阻断
+                    return True, None
                 logger.warning("ContentGuard: 疑似幻觉 '%s': %s", desc, detail[:80])
                 return False, f"内容审核：{desc} '{detail[:60]}'，请验证信息准确性。"
 

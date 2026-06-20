@@ -209,7 +209,14 @@ function highlightCode(code: string, lang?: string): string {
   const cacheKey = `${lang || 'text'}:${code.slice(0, 200)}`
   if (_hlCache.has(cacheKey)) return _hlCache.get(cacheKey)!
 
-  let escaped = code
+  // 先移除LLM可能错误输出的HTML标签（如 <span class="sk">），防止显示原始标签文本
+  let cleaned = code
+    .replace(/<span\b[^>]*>/gi, '')
+    .replace(/<\/span>/gi, '')
+    .replace(/<div\b[^>]*>/gi, '')
+    .replace(/<\/div>/gi, '')
+
+  let escaped = cleaned
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -266,6 +273,39 @@ function highlightCode(code: string, lang?: string): string {
     escaped = escaped.replace(/(#.*)$/gm, '<span class="sc">$1</span>')
     escaped = escaped.replace(/^(\s*)([\w-]+)(:)/gm, '$1<span class="sk">$2</span>$3')
     escaped = escaped.replace(/("(?:[^"\\]|\\.)*")/g, '<span class="ss">$1</span>')
+  } else if (lang === 'cpp' || lang === 'c++' || lang === 'c') {
+    const kw = 'int|float|double|char|void|bool|class|struct|namespace|using|template|typename|virtual|override|public|private|protected|const|static|auto|return|if|else|for|while|do|switch|case|break|continue|new|delete|nullptr|true|false|include|define|typedef|sizeof|try|catch|throw|std|cout|cin|endl|vector|string|map|set|pair|unique_ptr|shared_ptr|constexpr|noexcept|enum|explicit|friend|inline|long|short|signed|unsigned|union|volatile|wchar_t'
+    escaped = escaped.replace(new RegExp(`\\b(${kw})\\b`, 'g'), '<span class="sk">$1</span>')
+    escaped = escaped.replace(/(#.*)$/gm, '<span class="sc">$1</span>')
+    escaped = escaped.replace(/(\/\/.*)$/gm, '<span class="sc">$1</span>')
+    escaped = escaped.replace(/("(?:[^"\\]|\\.)*")/g, '<span class="ss">$1</span>')
+    escaped = escaped.replace(/\b([a-zA-Z_]\w*)(\s*\()/g, '<span class="sf">$1</span>$2')
+    escaped = escaped.replace(/\b(\d+\.?\d*)\b/g, '<span class="sn">$1</span>')
+  } else if (lang === 'java') {
+    const kw = 'public|private|protected|class|interface|extends|implements|static|final|void|int|long|double|float|boolean|char|String|return|if|else|for|while|do|switch|case|break|continue|new|this|super|try|catch|throw|throws|import|package|null|true|false|abstract|synchronized|volatile|transient|enum|instanceof|native|strictfp|assert|default'
+    escaped = escaped.replace(new RegExp(`\\b(${kw})\\b`, 'g'), '<span class="sk">$1</span>')
+    escaped = escaped.replace(/(\/\/.*)$/gm, '<span class="sc">$1</span>')
+    escaped = escaped.replace(/("(?:[^"\\]|\\.)*")/g, '<span class="ss">$1</span>')
+    escaped = escaped.replace(/('(?:[^'\\]|\\.)*')/g, '<span class="ss">$1</span>')
+    escaped = escaped.replace(/\b([a-zA-Z_]\w*)(\s*\()/g, '<span class="sf">$1</span>$2')
+    escaped = escaped.replace(/\b(\d+\.?\d*)\b/g, '<span class="sn">$1</span>')
+  } else if (lang === 'go' || lang === 'golang') {
+    const kw = 'func|var|const|type|struct|interface|map|chan|defer|go|return|if|else|for|range|switch|case|break|continue|fallthrough|import|package|nil|true|false|make|new|append|len|cap|select|goto|int|int8|int16|int32|int64|uint|uint8|uint16|uint32|uint64|float32|float64|string|bool|byte|rune|error'
+    escaped = escaped.replace(new RegExp(`\\b(${kw})\\b`, 'g'), '<span class="sk">$1</span>')
+    escaped = escaped.replace(/(\/\/.*)$/gm, '<span class="sc">$1</span>')
+    escaped = escaped.replace(/("(?:[^"\\]|\\.)*")/g, '<span class="ss">$1</span>')
+    escaped = escaped.replace(/(`(?:[^`\\]|\\.)*`)/g, '<span class="ss">$1</span>')
+    escaped = escaped.replace(/\b([a-zA-Z_]\w*)(\s*\()/g, '<span class="sf">$1</span>$2')
+    escaped = escaped.replace(/\b(\d+\.?\d*)\b/g, '<span class="sn">$1</span>')
+  } else if (lang === 'rust' || lang === 'rs') {
+    const kw = 'fn|let|mut|struct|impl|trait|enum|match|use|mod|pub|self|super|where|as|ref|loop|while|for|if|else|return|break|continue|in|move|async|await|Some|None|Ok|Err|Result|Option|Vec|String|const|static|type|dyn|unsafe|extern|crate|macro_rules|true|false|box|drop'
+    escaped = escaped.replace(new RegExp(`\\b(${kw})\\b`, 'g'), '<span class="sk">$1</span>')
+    escaped = escaped.replace(/(\/\/.*)$/gm, '<span class="sc">$1</span>')
+    escaped = escaped.replace(/(\/\*[\s\S]*?\*\/)/g, '<span class="sc">$1</span>')
+    escaped = escaped.replace(/("(?:[^"\\]|\\.)*")/g, '<span class="ss">$1</span>')
+    escaped = escaped.replace(/\b([a-zA-Z_]\w*)(\s*\()/g, '<span class="sf">$1</span>$2')
+    escaped = escaped.replace(/('(?:[^'\\]|\\.)*')/g, '<span class="ss">$1</span>')
+    escaped = escaped.replace(/\b(\d+\.?\d*(?:u8|u16|u32|u64|i8|i16|i32|i64|f32|f64|usize|isize)?)\b/g, '<span class="sn">$1</span>')
   }
 
   // 写入缓存，LRU淘汰
@@ -336,8 +376,14 @@ const rendered = computed(() => {
     return '<div class="streaming-loader"><span></span><span></span><span></span></div>'
   }
   // 流式输出中：跳过marked解析（每chunk都parse严重卡顿），直接HTML转义逐字渲染
+  // 同时移除可能被LLM错误输出的HTML标签（如 <span class="sk">），防止显示原始标签文本
   if (props.isStreaming && props.content) {
-    return '<p>' + (props.content || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>') + '</p>'
+    const cleaned = (props.content || '')
+      .replace(/<span\b[^>]*>/gi, '')
+      .replace(/<\/span>/gi, '')
+      .replace(/<div\b[^>]*>/gi, '')
+      .replace(/<\/div>/gi, '')
+    return '<p>' + cleaned.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>') + '</p>'
   }
   try {
     // v3: mermaid 预处理

@@ -14,6 +14,7 @@ from langchain_core.messages import HumanMessage #消息类型--用户说的话
 from app.config import settings
 
 from app.agents.state import AgentState #通用类型
+from app.core.shared_utils import _get_profile_status  # 画像状态分析（与 chat_agent 共享）
 from app.agents.profile_agent import profile_agent_node
 from app.agents.resource_agent import resource_agent_node
 from app.agents.question_agent import question_agent_node, is_answer_submission  # 答案检测
@@ -27,66 +28,79 @@ logger = logging.getLogger(__name__)
 SUPERVISOR_PROMPT = """【你是纯分类器，不是回答者】
 你的唯一任务是判断用户意图，返回一个 JSON 对象。
 绝对禁止：解释概念、回答问题、生成题目、给出建议。只做分类。
+Support both Chinese and English input.
 
 意图类型（6选1）：
-- chat: 闲聊/问候/感谢/情绪表达
-- resource: 学习请求/获取知识/生成代码/生成文档/生成导图/对比分析/调试帮助
-- question: 出题/做题/练习/测试/刷题/答题/提交答案
-- path: 路线/计划/下一步/学什么好/学习规划/先后顺序
-- evaluation: 评估/报告/水平检测/掌握情况/检查进度
-- profile: 描述学习背景/基础/时间安排/偏好（不含具体学习请求的自述）
+- chat: 闲聊/问候/感谢/情绪表达 | casual chat/greeting/thanks/emotions
+- resource: 学习请求/获取知识/生成代码/生成文档/生成导图/对比分析/调试帮助 | learn/explain/teach/generate code/debug/difference between
+- question: 出题/做题/练习/测试/刷题/答题/提交答案 | generate questions/exercises/quiz/practice problems/coding problems
+- path: 路线/计划/下一步/学什么好/学习规划/先后顺序 | learning path/roadmap/plan/what to learn next/study plan
+- evaluation: 评估/报告/水平检测/掌握情况/检查进度 | evaluate/assess/report/check progress/how am I doing
+- profile: 描述学习背景/基础/时间安排/偏好（不含具体学习请求的自述）| describe background/experience/learning preferences (not specific learning requests)
 
 ────────────────────────────────
-resource 意图详细触发词分类
+resource 意图详细触发词分类 (Detailed resource triggers)
 ────────────────────────────────
 
-【A类-概念学习】
-触发词："学XX""教我XX""解释XX""什么是XX""XX的概念""XX的原理"
+【A类-概念学习 Concept Learning】
+触发词(CN): "学XX""教我XX""解释XX""什么是XX""XX的概念""XX的原理"
        "XX和YY的区别""XX vs YY""对比XX和YY""XX的优缺点"
        "为什么要用XX""XX解决了什么问题""XX的适用场景"
+触发词(EN): "teach me""explain""what is""how does""how to""tell me about"
+       "difference between""vs""compare""pros and cons""why use"
+       "show me how""I want to learn""I want to understand"
 → params.resource_type = "document"
 
-【B类-代码生成与调试】
-触发词："写一个XX""写段代码""写个函数""用XX实现YY""实现一个XX"
+【B类-代码生成与调试 Code Generation & Debugging】
+触发词(CN): "写一个XX""写段代码""写个函数""用XX实现YY""实现一个XX"
        "XX怎么写""XX如何实现""XX的代码示例""XX的语法"
        "帮我debug""这段代码错在哪""为什么报错""fix这个bug"
        "改一下这段代码""帮我优化XX""这段代码能优化吗"
+触发词(EN): "write a""write code""implement""code example""how to code"
+       "debug""fix this""why does this error""bug""error"
+       "optimize""refactor""code snippet""show me the code"
 → params.resource_type = "code_example"
 
-【C类-资料生成】
-触发词："生成XX""制作XX""创建XX""画一个XX""画个XX"
+【C类-资料生成 Content Generation】
+触发词(CN): "生成XX""制作XX""创建XX""画一个XX""画个XX"
        "思维导图""脑图""知识图谱""整理笔记""总结一下"
        "列一个XX""列出XX的用法""XX的API汇总""XX速查表"
-→ 含"思维导图/脑图/导图/画" → params.resource_type = "mindmap"
-→ 含"出题/练习题/题目" → params.resource_type = "question_set"
+触发词(EN): "generate""create""make a""mindmap""mind map""summary"
+       "cheatsheet""cheat sheet""list out""overview""outline"
+→ 含"思维导图/脑图/导图/画/mindmap/mind map" → params.resource_type = "mindmap"
+→ 含"出题/练习题/题目/exercise/question/generate problem" → params.resource_type = "question_set"
 → 其他 → params.resource_type = "document"
 
-【D类-对比分析】
-触发词："XX和YY的区别""XX vs YY""对比""差异""辨析""优缺点"
+【D类-对比分析 Comparison】
+触发词(CN): "XX和YY的区别""XX vs YY""对比""差异""辨析""优缺点"
+触发词(EN): "difference between""vs""compare""comparison""pros and cons""trade off"
 → params.resource_type = "document"（生成含对比表格的文档）
 
 ────────────────────────────────
-意图分类规则（严格按优先级从高到低匹配）
+意图分类规则 Intent Classification Rules (strict priority order)
 ────────────────────────────────
 
-1. 含"评估""报告""水平""掌握""能打几分""检查进度""学得怎样" → evaluation
-2. 含"出题""做题""练习""测试""刷题""几道""题目""编程题""测一下""来一题" → question
-3. 含"路线""计划""下一步""学什么""路径""规划""先后顺序""先学哪个""学到哪" → path
-4. 含上述 A/B/C/D 任一类 resource 触发词 → resource
-5. 描述自己学习背景/基础/时间安排/偏好，且不含具体学习请求 → profile
+1. 含"评估"/"报告"/"水平"/"掌握"/"evaluate"/"assess"/"report"/"check my"/"how am I"/"progress" → evaluation
+2. 含"出题"/"做题"/"练习"/"测试"/"题目"/"generate question"/"give me problem"/"quiz"/"exercise"/"coding problem"/"algorithm problem" → question
+   ⚠️ 关键区分: "写一个XX代码/代码示例" → resource (code_example), 不是 question
+   ⚠️ "explain/teach me/what is" → resource, 不是 question
+   ⚠️ question 只匹配: 出题测试/quiz/练习/exercise/practice problem
+3. 含"路线"/"计划"/"下一步"/"路径"/"规划"/"roadmap"/"learning path"/"what next"/"what should I learn"/"study plan"/"path" → path
+4. 含上述 A/B/C/D 任一类 resource 触发词(CN or EN) → resource
+5. 描述自己学习背景/基础/时间安排/偏好(不含具体学习请求) | "I am a""I have experience""I'm a beginner""my background" → profile
 6. 其他 → chat
 
 ────────────────────────────────
-输出格式（只输出JSON，不要任何其他文字）
+输出格式 Output Format (只输出JSON，不要任何其他文字)
 ────────────────────────────────
 
 对于 resource 意图，params 必须包含 resource_type 推测和 topic：
 {"intent":"resource","params":{"resource_type":"code_example","topic":"快速排序"}}
 
 resource_type 取值: document / code_example / mindmap / question_set
-- "写XX代码""XX怎么写""debug""代码示例""实现XX""写个函数" → code_example
-- "思维导图""脑图""画个图""知识图谱" → mindmap
-- "出题""练习题""题目" → question_set
+- "写XX代码""XX怎么写""debug""代码示例""write code""implement""code example" → code_example
+- "思维导图""脑图""画个图""mindmap""mind map" → mindmap
+- "出题""练习题""题目""generate questions""exercises" → question_set
 - 其他 → document
 
 对于其他意图，params 可为空：
@@ -128,37 +142,25 @@ CHAT_PROFILE_GUIDE_COMPLETE = """
 【画像引导】用户画像已完整。回复结尾可以自然地推荐下一步学习操作，例如评估、出题、规划路径等。不要追问画像相关问题。"""
 
 
-def _get_profile_status(profile: dict | None) -> tuple[list[str], list[str]]:
-    """分析画像填写状态，返回 (已填维度列表, 未填维度列表)"""
-    ALL_DIMS = ["knowledge_base", "cognitive_style", "learning_goal", "weekly_hours", "preferred_resource_type", "error_patterns"]
-    DIM_LABELS = {
-        "knowledge_base": "知识基础",
-        "cognitive_style": "认知风格",
-        "learning_goal": "学习目标",
-        "weekly_hours": "每周时间",
-        "preferred_resource_type": "偏好资源",
-        "error_patterns": "易错模式",
-    }
-    profile = profile or {}
-    filled = [DIM_LABELS[k] for k in ALL_DIMS if k in profile and profile[k] is not None and profile[k] != ""]
-    empty = [DIM_LABELS[k] for k in ALL_DIMS if k not in profile or profile[k] is None or profile[k] == ""]
-    return filled, empty
-
-
 def _is_broad_learning_request(text: str) -> bool:
     """判断用户消息是否为广泛学习请求（需启动教学流程，而非点对点资源生成）
-
-    排除特定问题（"XX是什么""XX和YY的区别"等），只匹配明确的"我想系统学XX"类请求。
+    支持中英双语
     """
+    text_lower = text.lower().strip()
+
     # 先排除：含特定问题关键词的不触发教学流程
     specific_markers = [
         "是什么", "什么意思", "区别", "vs", "VS", "对比", "比较",
         "怎么用", "怎么写", "如何实现", "实现一个", "写一个", "写一段",
         "代码", "debug", "报错", "bug", "错在哪", "怎么改", "怎么做",
         "如何做", "示例", "例子", "总结", "定义", "概念",
+        # EN specific markers
+        "what is", "difference between", "how to", "how do i",
+        "write a", "implement", "debug", "bug", "error",
+        "example", "tutorial on", "explain",
     ]
     for mk in specific_markers:
-        if mk in text:
+        if mk in text_lower:
             return False
 
     # 广泛学习意图关键词
@@ -166,15 +168,18 @@ def _is_broad_learning_request(text: str) -> bool:
         "我想学", "我要学", "教我", "教一下", "想学", "学一下",
         "帮我学", "从零", "入门", "系统地", "系统学", "零基础",
         "初学", "刚开始学", "想系统学", "想好好学",
+        # EN broad markers
+        "i want to learn", "teach me", "i want to study",
+        "from scratch", "beginner", "i'm new to",
+        "start learning", "learn from", "get started",
     ]
     for mk in broad_markers:
-        if mk in text:
+        if mk in text_lower:
             return True
 
-    # 短消息 + 含"学/学习"+"语言/学科名"（如"学Python""学C++""学算法""学前端"）
+    # 短消息 + 含"学/学习/learn"+"语言/学科名"
     stripped = text.strip()
-    if len(stripped) <= 15 and ("学" in stripped or "学习" in stripped):
-        # 必须包含具体学科名，不是"学习"单独使用
+    if len(stripped) <= 30 and ("学" in stripped or "学习" in stripped or "learn" in text_lower):
         subject_hints = [
             "Python", "Java", "C++", "Go", "Rust", "JavaScript", "TypeScript",
             "前端", "后端", "算法", "数据结构", "机器学习", "深度学习",
@@ -182,7 +187,7 @@ def _is_broad_learning_request(text: str) -> bool:
             "React", "Vue", "Spring", "Django", "Flask", "FastAPI",
         ]
         for subj in subject_hints:
-            if subj.lower() in stripped.lower():
+            if subj.lower() in text_lower:
                 return True
 
     return False
@@ -205,37 +210,71 @@ def _is_teaching_continue(text: str) -> bool:
 
 
 def _keyword_fallback(text: str) -> dict:
-    """JSON 解析失败时的关键词兜底意图分类"""
+    """JSON 解析失败时的关键词兜底意图分类 (中英双语)"""
+    text_lower = text.lower()
     # 优先级从高到低：具体意图 > 通用意图
-    if any(k in text for k in ["评估", "报告", "水平", "掌握", "学习情况"]):
+
+    # ── evaluation: 评估/报告 ──
+    if any(k in text for k in ["评估", "报告", "水平", "掌握", "学习情况",
+                                "evaluate", "assess", "how am i", "check my",
+                                "my progress", "report on"]):
         return {"intent": "evaluation", "params": {}}
-    # question: 支持多种变体（"出X道题""做X道""刷题""练习"等）
-    if any(k in text for k in ["出题", "做题", "练习", "测试", "刷题", "再来一道",
-                                "算法题", "编程题"]):
+
+    # ── question: 出题/做题/练习 (only explicit test/quiz requests) ──
+    if any(k in text for k in ["出题", "做题", "测试", "刷题", "再来一道",
+                                "算法题", "编程题",
+                                "generate question", "give me a problem",
+                                "give me an algorithm",
+                                "quiz me", "test me", "practice problem",
+                                "algorithm problem"]):
         return {"intent": "question", "params": {}}
     # 宽松匹配：含"道"+"题"或单独的"题目"/"几道"
     if re.search(r'\d*道.*题|题.*\d*道|几道|题目', text):
         return {"intent": "question", "params": {}}
-    if any(k in text for k in ["路线", "计划", "下一步", "学什么", "接下来", "学到哪"]):
+    # EN: explicit exercise/quiz requests (NOT general "write/explain" requests)
+    # Allow intervening words between number and type: "give me 3 Python basic exercises"
+    if re.search(r'(?:give|generate|create|make)\s+me\s+(?:\d+\s+)?(?:\w+\s+){0,5}(?:problems?|questions?|exercises?|challenges?|quiz(?:zes)?)', text_lower):
+        return {"intent": "question", "params": {}}
+
+    # ── path: 路线/计划/下一步 ──
+    if any(k in text for k in ["路线", "计划", "下一步", "学什么", "接下来", "学到哪",
+                                "roadmap", "learning path", "what next",
+                                "what should i learn", "study plan",
+                                "learning plan"]):
         return {"intent": "path", "params": {}}
-    # profile 关键词：只匹配明确的自述（"我是XX"而非"我想学XX"是因为后者是学习请求）
-    if any(k in text for k in ["我是初学者", "我零基础", "我没学过", "我是小白", "我是新手"]):
+
+    # ── profile: 自述背景/经验 ──
+    if any(k in text for k in ["我是初学者", "我零基础", "我没学过", "我是小白", "我是新手",
+                                "我有经验", "我之前", "我在做", "我从事", "我是做",
+                                "i am a beginner", "i have experience",
+                                "i'm a student", "i am a student",
+                                "my background", "i work as", "i'm a"]):
         return {"intent": "profile", "params": {}}
-    if any(k in text for k in ["我有经验", "我之前", "我在做", "我从事", "我是做"]):
-        return {"intent": "profile", "params": {}}
-    # resource 关键词放在最后（最通用，但排除"我想学"→profile已在上面处理）
+
+    # ── resource: 学习请求 (放最后，最通用) ──
     if any(k in text for k in ["教我", "解释", "什么是", "怎么用", "教一下", "帮我学", "介绍一下",
+                                "我想学", "我要学", "想学", "学一下",  # 明确学习意图
                                 "区别", "对比", "差异", "为什么", "如何", "怎么", "原理",
                                 "是什么", "vs", "VS", "优缺点", "辨析",
                                 "生成", "制作", "创建", "做一个", "画一个", "画个",
                                 "写一个", "写一段", "写个", "给我写", "给我一个", "写个函数",
                                 "给我讲", "讲一下", "讲解", "介绍", "意思", "含义",
                                 "思维导图", "代码示例", "代码案例", "列一个", "列出",
-                                "整理", "总结一下", "了解一下", "学一下",
+                                "整理", "总结一下", "了解一下",
                                 "怎么写", "如何实现", "实现一个", "用XX实现", "debug",
                                 "错在哪", "为什么报错", "fix", "报错", "bug",
                                 "代码能优化", "帮我优化", "改一下代码"]):
         return {"intent": "resource", "params": {}}
+    # EN: resource triggers
+    if any(k in text_lower for k in ["teach me", "explain", "what is", "how does",
+                                       "how to", "tell me about", "difference between",
+                                       "compare", "write a", "write code", "implement",
+                                       "code example", "how do i", "generate", "create",
+                                       "mindmap", "mind map", "debug", "fix this",
+                                       "why does this", "show me", "i want to learn",
+                                       "i want to understand", "cheatsheet", "tutorial"]):
+        return {"intent": "resource", "params": {}}
+
     return {"intent": "chat", "params": {}}
 
 
@@ -281,6 +320,8 @@ def supervisor_node(state: AgentState, spark: SparkClient) -> dict:
     """Supervisor 节点：分析用户意图 → 决定路由到哪个 Agent"""
     state = dict(state)  # TypedDict → dict（确保下标访问可用）
     last_msg = state["messages"][-1].content if state["messages"] else ""#取最后一条，提取内容分析
+    # (debug code removed)
+    last_msg_lower = last_msg.lower()
     profile = state.get("user_profile") or {}
     all_messages = state.get("messages", [])
     agent_outputs = state.get("agent_outputs", {})
@@ -290,11 +331,13 @@ def supervisor_node(state: AgentState, spark: SparkClient) -> dict:
     # 优先级-1: 重入检测 —— Agent 执行完毕后决定是否链式调用
     # ══════════════════════════════════════
     if current_agent != "supervisor":
+        tc = state.get("teaching_context") or {}
+
         # 教学流程链式路由: path_agent (teaching) → resource_agent
         if current_agent == "path_agent":
             path_output = agent_outputs.get("path_agent", {})
             if path_output.get("teaching_stage") in ("starting", "node_ready"):
-                logger.info("Supervisor: 教学链式 path_agent → resource_agent")
+                logger.info("Supervisor: 教学链式 path_agent → resource_agent (node=%s)", path_output.get("current_node"))
                 return {
                     "current_agent": "supervisor",
                     "next_agent": "resource_agent",
@@ -309,6 +352,113 @@ def supervisor_node(state: AgentState, spark: SparkClient) -> dict:
                     "context": state.get("context", {}),
                     "stream_buffer": "",
                 }
+
+        # 画像优先流程: profile_agent 完成采集 → 回到原意图
+        if current_agent == "profile_agent":
+            ctx = state.get("context", {})
+            if ctx.get("profile_first"):
+                deferred = ctx.get("deferred_intent", "resource")
+                logger.info("Supervisor: 画像采集完成 → 回到原意图 %s", deferred)
+                route_map_agent = {
+                    "resource": "resource_agent", "question": "question_agent",
+                    "path": "path_agent", "evaluation": "evaluation_agent",
+                }
+                return {
+                    "current_agent": "supervisor",
+                    "next_agent": route_map_agent.get(deferred, "resource_agent"),
+                    "context": {
+                        **ctx.get("deferred_context", {}),
+                        "profile_first_done": True,
+                    },
+                    "stream_buffer": "",
+                }
+
+        # v5: 教学模式智能推进 — 阶段内自动前进, 阶段边界给用户选择
+        # 设计: 每3个节点为一个阶段, 阶段内自动推进, 阶段结束给结构化选项
+        if current_agent == "resource_agent" and tc.get("mode") == "teaching":
+            current_idx = tc.get("current_index", 0)
+            total = len(tc.get("active_path", []))
+            auto_count = tc.get("auto_advance_count", 0)
+
+            # 安全检查: 单轮最多自动推进3个节点 (防止任何可能的循环)
+            if auto_count >= 3:
+                logger.info("Supervisor: 教学 auto_advance 已达上限(%d) → END", auto_count)
+                # Reset counter for next round
+                tc["auto_advance_count"] = 0
+                return {
+                    "current_agent": "supervisor",
+                    "next_agent": "END",
+                    "context": state.get("context", {}),
+                    "teaching_context": tc,
+                    "stream_buffer": "",
+                }
+
+            # 判断是否是阶段边界 (每3个节点为一个阶段)
+            is_stage_boundary = (current_idx > 0 and (current_idx + 1) % 3 == 0)
+            is_last_node = (current_idx + 1 >= total)
+
+            if is_last_node:
+                # 全部完成 → END, 让 path_agent 的 _teaching_advance 处理完成逻辑
+                logger.info("Supervisor: 教学最后一个节点 → END")
+                tc["auto_advance_count"] = 0
+                return {
+                    "current_agent": "supervisor",
+                    "next_agent": "END",
+                    "context": state.get("context", {}),
+                    "teaching_context": tc,
+                    "stream_buffer": "",
+                }
+            elif is_stage_boundary:
+                # 阶段边界 → END, 给用户结构化选择
+                logger.info("Supervisor: 教学阶段边界 (index=%d/%d) → END with options", current_idx, total)
+                tc["auto_advance_count"] = 0
+                return {
+                    "current_agent": "supervisor",
+                    "next_agent": "END",
+                    "context": state.get("context", {}),
+                    "teaching_context": tc,
+                    "stream_buffer": "",
+                }
+            else:
+                # 阶段内 → 自动推进到下一个节点
+                logger.info("Supervisor: 教学 auto-advance %d/%d → path_agent", current_idx + 1, total)
+                tc["auto_advance_count"] = auto_count + 1
+                return {
+                    "current_agent": "supervisor",
+                    "next_agent": "path_agent",
+                    "context": {"teaching_continue": True},
+                    "teaching_context": tc,
+                    "stream_buffer": "",
+                }
+
+        # v5.2: profile_agent 完成后 → 如果有延迟意图且画像已足够，链式路由到原始意图
+        if current_agent == "profile_agent":
+            ctx = state.get("context") or {}
+            deferred_intent = ctx.get("deferred_intent")
+            if deferred_intent:
+                # Check if profile is complete enough to proceed (>= 3 dims)
+                filled_dims, _ = _get_profile_status(state.get("user_profile"))
+                if len(filled_dims) >= 3:
+                    deferred_params = ctx.get("deferred_params", {})
+                    _intern_route = {
+                        "profile": "profile_agent",
+                        "resource": "resource_agent",
+                        "question": "question_agent",
+                        "path": "path_agent",
+                        "evaluation": "evaluation_agent",
+                    }
+                    next_deferred = _intern_route.get(deferred_intent, "chat_agent")
+                    logger.info("Supervisor: 画像采集完成(%d/6维) → 路由到延迟意图 %s → %s",
+                                len(filled_dims), deferred_intent, next_deferred)
+                    return {
+                        "current_agent": "supervisor",
+                        "next_agent": next_deferred,
+                        "context": deferred_params,
+                        "stream_buffer": "",
+                    }
+                else:
+                    logger.info("Supervisor: 画像采集中(%d/6维，需≥3) → 等待下一轮", len(filled_dims))
+            # No deferred intent or profile still sparse → fall through to END
 
         logger.info("Supervisor: Agent '%s' 已完成，结束当前轮次", current_agent)
         return {
@@ -383,64 +533,56 @@ def supervisor_node(state: AgentState, spark: SparkClient) -> dict:
             empty_dims=", ".join(empty_dims),
         )
 
-    # 意图分类：携带最近对话历史（最多3轮），提供足够上下文理解代词和追问
-    classify_context = []
-    for msg in all_messages[-6:]:  # 最近6条消息（约3轮对话）
-        content = str(getattr(msg, 'content', msg))
-        msg_type = type(msg).__name__
-        if 'Human' in msg_type:
-            classify_context.append({"role": "user", "content": content[:300]})
-        elif 'AI' in msg_type:
-            classify_context.append({"role": "assistant", "content": content[:200]})
-    # 确保最后一条是用户消息（当前问题），防止all_messages末尾非HumanMessage
-    if not classify_context or classify_context[-1].get("role") != "user":
-        classify_context.append({"role": "user", "content": last_msg})
+    # ═══════════════════════════════════════════════════════════
+    # 意图分类: 关键词优先 (keyword-first), LLM 仅做兜底
+    # ═══════════════════════════════════════════════════════════
+    kw_result = _keyword_fallback(last_msg)
+    kw_intent = kw_result["intent"]
 
-    classify_messages = [
-        {"role": "system", "content": system_prompt},
-    ] + classify_context
+    if kw_intent != "chat":
+        # 关键词有明确匹配 → 直接使用, 不调用 LLM
+        intent = kw_intent
+        result = kw_result
+        logger.info("Supervisor: keyword routing intent=%s (skipping LLM)", intent)
+    else:
+        # 关键词无匹配 → LLM 兜底分类
+        # 构建带最近对话历史的分类上下文
+        classify_context = []
+        for msg in all_messages[-6:]:
+            content = str(getattr(msg, 'content', msg))
+            msg_type = type(msg).__name__
+            if 'Human' in msg_type:
+                classify_context.append({"role": "user", "content": content[:300]})
+            elif 'AI' in msg_type:
+                classify_context.append({"role": "assistant", "content": content[:200]})
+        if not classify_context or classify_context[-1].get("role") != "user":
+            classify_context.append({"role": "user", "content": last_msg})
 
-    raw = ""
-    try:
-        raw = spark.chat_sync(classify_messages, temperature=0.3) #返回完整回复
-        result = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())#清除外套markdown
-    except Exception:
-        # 解析失败 → 先尝试从 LLM 回复中提取 intent 字段
-        match = re.search(r'"intent"\s*:\s*"(\w+)"', raw)
-        if match:
-            result = {"intent": match.group(1), "params": {}}
-        else:
-            # 最后兜底：关键词匹配
-            result = _keyword_fallback(last_msg)
+        classify_messages = [{"role": "system", "content": system_prompt}] + classify_context
 
-    intent = result.get("intent", "chat")
+        raw = ""
+        try:
+            raw = spark.chat_sync(classify_messages, temperature=0.3)
+            result = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
+        except Exception:
+            match = re.search(r'"intent"\s*:\s*"(\w+)"', raw)
+            if match:
+                result = {"intent": match.group(1), "params": {}}
+            else:
+                result = {"intent": "chat", "params": {}}
 
-    # 关键词覆盖1：LLM 分类为 chat 时，用关键词二次校验
-    if intent == "chat":
-        corrected = _keyword_fallback(last_msg)
-        if corrected["intent"] != "chat":
-            intent = corrected["intent"]
+        intent = result.get("intent", "chat")
+        logger.info("Supervisor: LLM fallback intent=%s", intent)
 
-    # 关键词覆盖2：LLM 分类为 resource 时，用关键词二次校验（resource 太通用）
-    if intent == "resource":
-        # 2a: 更具体的意图优先
-        corrected = _keyword_fallback(last_msg)
-        if corrected["intent"] not in ("resource", "chat"):
-            intent = corrected["intent"]
-            logger.info("LLM said resource, keyword corrected to %s", intent)
-        else:
-            # 2b: 检查是否像 profile
-            # 注意：只匹配明确的自述句（"我是XX"不是"我想学XX"）
-            profile_kw = ["我是学", "我是做", "我是计算机", "我有经验", "我学过", "我之前", "我在做"]
-            # "我想学XX" → resource_agent (not profile!)
-            if any(k in last_msg for k in profile_kw):
-                intent = "profile"
-            # 更宽松匹配：明确的初学者自述（但不包含具体的"学XX"请求）
-            if any(k in last_msg for k in ["我是初学者", "我零基础", "我没学过"]) and not any(k in last_msg for k in ["学Python","学java","学C+","学算法","学数据","学机器","学前端","学后端"]):
-                intent = "profile"
-            if any(k in last_msg for k in profile_kw):
-                intent = "profile"
-                logger.info("LLM said resource, keyword corrected to %s", intent)
+        # Extra guard: LLM 误判 question → resource correction
+        if intent == "question":
+            has_strong_q = (
+                re.search(r'(?:give|generate|create|make)\s+me\s+(?:\d+\s+)?(?:\w+\s+){0,5}(?:problems?|questions?|exercises?|challenges?|quiz)', last_msg_lower)
+                or any(k in last_msg for k in ["出题", "做题", "刷题", "题目", "几道", "测试"])
+            )
+            if not has_strong_q:
+                intent = "resource"
+                logger.info("Supervisor: LLM question→resource correction")
 
     route_map = {
         "profile": "profile_agent",
@@ -463,6 +605,28 @@ def supervisor_node(state: AgentState, spark: SparkClient) -> dict:
             context_result = dict(context_result)
             context_result["init_teaching"] = True
             logger.info("Supervisor: 广泛学习请求 → 启动教学流程 (via path_agent)")
+
+    # ══════════════════════════════════════
+    # 新用户画像优先: 画像不完整(<3维)时先采集画像，再链式处理原始意图
+    # 放在 broad learning 之后，确保 deferred_intent 是最终路由目标
+    # ══════════════════════════════════════
+    LEARNING_AGENTS = {"resource_agent", "question_agent", "path_agent", "evaluation_agent"}
+    if next_agent in LEARNING_AGENTS and (not tc or not tc.get("mode")):
+        filled_dims, _ = _get_profile_status(profile)
+        if len(filled_dims) < 3 and not state.get("context", {}).get("profile_first_done"):
+            logger.info("Supervisor: 画像稀疏(%d/6维) → profile_agent 优先 (defer %s)",
+                        len(filled_dims), next_agent)
+            return {
+                "current_agent": "supervisor",
+                "next_agent": "profile_agent",
+                "context": {
+                    "profile_first": True,
+                    "deferred_intent": next_agent.replace("_agent", ""),  # 原始意图标识
+                    "deferred_params": context_result,                    # 已含 init_teaching 等
+                    "deferred_message": last_msg,
+                },
+                "stream_buffer": "",
+            }
 
     logger.info("Supervisor: intent=%s → route=%s", intent, next_agent)
 
