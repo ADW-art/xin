@@ -20,6 +20,7 @@ def _profile_to_response(p: LearningProfile) -> ProfileResponse:
         error_patterns=p.error_patterns,
         preferred_resource_type=p.preferred_resource_type,
         dimension_scores=p.dimension_scores,
+        suggestions=p.suggestions,
     )
 
 # JSON fields that need deep merge instead of full replacement
