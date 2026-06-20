@@ -779,20 +779,19 @@ onMounted(() => { loadAll(); loadAgentStats() })
 .welcome-step .el-icon { color: #C4CCD6; flex-shrink: 0; }
 
 /* ── 智能推荐面板 ── */
-.panel-suggestions { border-color: rgba(245,158,11,.2); background: #FFFCF5; }
+.panel-suggestions { border-color: var(--blue-primary-light) !important; background: var(--bg-input) !important; }
 .sg-item {
   display: flex; align-items: center; gap: 10px;
   padding: 10px 12px;
-  background: #FFFFFF; border: 1px solid #FDE68A; border-radius: 8px;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
   cursor: pointer; transition: all .15s; margin-bottom: 6px;
 }
 .sg-item:last-child { margin-bottom: 0; }
-.sg-item:hover { border-color: #F59E0B; box-shadow: 0 1px 4px rgba(245,158,11,.15); }
-.sg-icon { font-size: 20px; flex-shrink: 0; }
+.sg-item:hover { border-color: #93C5FD; box-shadow: 0 1px 4px rgba(37,99,235,.08); }
+.sg-icon { font-size: 20px; flex-shrink: 0; color: var(--primary); }
 .sg-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.sg-reason { font-size: 13px; color: #4B5563; line-height: 1.4; }
-.sg-action { font-size: 11px; color: #F59E0B; font-weight: 600; margin-top: 2px; }
-.sg-item .el-icon { color: #9CA3AF; flex-shrink: 0; }
+.sg-reason { font-size: 13px; color: var(--text-secondary); line-height: 1.4; }
+.sg-action { font-size: 11px; color: var(--primary); font-weight: 600; margin-top: 2px; }
 
 /* ═══════════ Center — Agent Stats ═══════════ */
 .agent-stats-row {
@@ -948,11 +947,4 @@ onMounted(() => { loadAll(); loadAgentStats() })
   }
 }
 
-/* Suggestion panel */
-.sg-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: #FFFFFF; border: 1px solid #E8ECF1; border-radius: 8px; cursor: pointer; transition: all .15s; margin-bottom: 6px; }
-.sg-item:hover { border-color: #93C5FD; background: #FAFCFF; }
-.sg-item:last-child { margin-bottom: 0; }
-.sg-icon { color: var(--primary); flex-shrink: 0; }
-.sg-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.sg-action { font-size: 11px; color: var(--primary); font-weight: 600; margin-top: 2px; }
 </style>
