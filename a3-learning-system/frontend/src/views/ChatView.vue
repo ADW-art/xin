@@ -220,6 +220,8 @@ interface ConvoGroup {
   createdAt: string
   dateLabel: string
   preview: string
+  messageIds?: number[]
+  _deleting?: boolean
 }
 
 const store = useChatStore()
@@ -341,7 +343,7 @@ async function deleteConversation(convo: ConvoGroup) {
     })
   } catch { return }
   try {
-    for (const id of convo.messageIds) {
+    for (const id of (convo.messageIds || [])) {
       await api.delete(`/chat/history/${id}`)
     }
     // 如果删除的是当前活跃对话，清空聊天
@@ -499,9 +501,10 @@ function handleSend(content: string, images?: ChatImage[]) {
           type: 'info',
           duration: 5000,
           onClick: () => {
-            const to = routes[data.intent] || '/chat'
-            if (data.intent !== 'profile') {
-              router.push({ path: '/chat', query: { prompt: data.reason } })
+            const intent = data.intent || ''
+            const to = routes[intent] || '/chat'
+            if (intent !== 'profile') {
+              router.push({ path: '/chat', query: { prompt: data.reason || '' } })
             } else {
               router.push(to)
             }

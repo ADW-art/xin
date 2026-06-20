@@ -96,7 +96,7 @@
                 :stroke-width="edge.isActive ? 2.5 : 1.5"
                 :stroke-dasharray="edge.isActive ? 'none' : '6 4'"
                 fill="none"
-                :opacity="edge.isActive ? 1 : 0.5"
+                :opacity="edge.isActive ? 0.85 : 0.6"
                 :marker-end="edge.isActive ? `url(#arrowActive)` : `url(#arrowIdle)`"
                 class="edge-line"
                 :class="{ 'edge-live': edge.isActive }"
@@ -121,22 +121,22 @@
                       :cx="supervisorPos.x" :cy="supervisorPos.y" :r="48"
                       fill="none" stroke="#2563EB" stroke-width="1" opacity="0.25"
                       class="pulse-ring-anim"/>
-              <circle :cx="supervisorPos.x" :cy="supervisorPos.y" :r="38"
+              <circle :cx="supervisorPos.x" :cy="supervisorPos.y" :r="42"
                       :fill="supervisorData.isActive ? '#2563EB' : '#FFFFFF'"
-                      :stroke="supervisorData.isActive ? '#1D4ED8' : '#E2E8F0'"
-                      :stroke-width="supervisorData.isActive ? 2.5 : 1.5"
+                      :stroke="supervisorData.isActive ? '#1D4ED8' : '#CBD5E1'"
+                      :stroke-width="supervisorData.isActive ? 2.5 : 1.8"
                       class="node-shape"/>
-              <foreignObject :x="supervisorPos.x - 14" :y="supervisorPos.y - 14" width="28" height="28">
+              <foreignObject :x="supervisorPos.x - 16" :y="supervisorPos.y - 16" width="32" height="32">
                 <div class="node-icon-container" :style="{ color: supervisorData.isActive ? '#FFFFFF' : '#2563EB' }">
-                  <el-icon :size="20"><Cpu /></el-icon>
+                  <el-icon :size="24"><Cpu /></el-icon>
                 </div>
               </foreignObject>
               <text :x="supervisorPos.x" :y="supervisorPos.y + 56" text-anchor="middle"
-                    class="node-text-label" :fill="supervisorData.isActive ? '#1D4ED8' : '#475569'" font-weight="600">
+                    class="node-text-label" :fill="supervisorData.isActive ? '#FFFFFF' : '#1E293B'" font-weight="700">
                 {{ supervisorData.label }}
               </text>
               <text :x="supervisorPos.x" :y="supervisorPos.y + 70" text-anchor="middle"
-                    class="node-role-text" fill="#94A3B8">
+                    class="node-role-text" fill="#64748B">
                 {{ supervisorData.role }}
               </text>
               <g v-if="supervisorData.calls > 0"
@@ -156,21 +156,21 @@
               <circle v-if="agent.isActive" cx="0" cy="0" r="34"
                       fill="none" stroke="#2563EB" stroke-width="1" opacity="0.2"
                       class="pulse-ring-anim"/>
-              <rect x="-34" y="-22" width="68" height="44" rx="10"
+              <rect x="-38" y="-24" width="76" height="48" rx="11"
                     :fill="agent.isActive ? '#2563EB' : '#FFFFFF'"
-                    :stroke="agent.isActive ? '#1D4ED8' : '#E2E8F0'"
-                    :stroke-width="agent.isActive ? 2 : 1.5"
+                    :stroke="agent.isActive ? '#1D4ED8' : '#CBD5E1'"
+                    :stroke-width="agent.isActive ? 2 : 1.6"
                     class="node-shape"/>
-              <foreignObject x="-12" y="-12" width="24" height="24">
+              <foreignObject x="-14" y="-14" width="28" height="28">
                 <div class="node-icon-container" :style="{ color: agent.isActive ? '#FFFFFF' : '#2563EB' }">
-                  <el-icon :size="16"><component :is="agent.icon" /></el-icon>
+                  <el-icon :size="20"><component :is="agent.icon" /></el-icon>
                 </div>
               </foreignObject>
               <text x="0" y="36" text-anchor="middle"
-                    class="node-text-label" :fill="agent.isActive ? '#1D4ED8' : '#475569'" font-weight="600" font-size="11">
+                    class="node-text-label" :fill="agent.isActive ? '#FFFFFF' : '#1E293B'" font-weight="700" font-size="11">
                 {{ agent.label }}
               </text>
-              <text x="0" y="48" text-anchor="middle" class="node-role-text" fill="#94A3B8" font-size="9">
+              <text x="0" y="48" text-anchor="middle" class="node-role-text" fill="#64748B" font-size="9">
                 {{ agent.role }}
               </text>
               <g v-if="agent.calls > 0" transform="translate(26, -16)">
@@ -180,25 +180,25 @@
             </g>
 
             <!-- 用户输入节点 -->
-            <g transform="translate(65, 365)">
-              <circle cx="0" cy="0" r="22" fill="#EFF6FF" stroke="#93C5FD" stroke-width="1.5"/>
-              <foreignObject x="-11" y="-11" width="22" height="22">
+            <g transform="translate(70, 420)">
+              <circle cx="0" cy="0" r="26" fill="#EFF6FF" stroke="#93C5FD" stroke-width="1.8"/>
+              <foreignObject x="-14" y="-14" width="28" height="28">
                 <div class="node-icon-container" style="color:#1D4ED8">
-                  <el-icon :size="15"><User /></el-icon>
+                  <el-icon :size="18"><User /></el-icon>
                 </div>
               </foreignObject>
-              <text x="0" y="34" text-anchor="middle" font-size="10" fill="#94A3B8">用户输入</text>
+              <text x="0" y="38" text-anchor="middle" font-size="11" fill="#475569" font-weight="500">用户输入</text>
             </g>
 
             <!-- 输出节点 -->
-            <g transform="translate(655, 365)">
-              <circle cx="0" cy="0" r="22" fill="#EFF6FF" stroke="#93C5FD" stroke-width="1.5"/>
-              <foreignObject x="-11" y="-11" width="22" height="22">
+            <g transform="translate(750, 420)">
+              <circle cx="0" cy="0" r="26" fill="#EFF6FF" stroke="#93C5FD" stroke-width="1.8"/>
+              <foreignObject x="-14" y="-14" width="28" height="28">
                 <div class="node-icon-container" style="color:#1D4ED8">
-                  <el-icon :size="15"><ChatDotRound /></el-icon>
+                  <el-icon :size="18"><ChatDotRound /></el-icon>
                 </div>
               </foreignObject>
-              <text x="0" y="34" text-anchor="middle" font-size="10" fill="#94A3B8">响应输出</text>
+              <text x="0" y="38" text-anchor="middle" font-size="11" fill="#475569" font-weight="500">响应输出</text>
             </g>
           </svg>
         </div>
@@ -307,13 +307,15 @@
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useChatStore } from '@/stores/chat'
+import { useUserStore } from '@/stores/user'
 import api from '@/api/index'
 
 const chatStore = useChatStore()
+const userStore = useUserStore()
 
 // ── Canvas 尺寸（大屏展示）──
-const canvasWidth = 720
-const canvasHeight = 420
+const canvasWidth = 820
+const canvasHeight = 480
 
 // ── 状态变量 ──
 // (loading ref removed — unused)
@@ -335,6 +337,7 @@ const sessionStats = reactive({
 interface AgentInfo {
   name: string
   label: string
+  displayName?: string
   role: string
   description: string
   icon: string
@@ -356,7 +359,7 @@ function computeArcLayout(count: number): { x: number; y: number }[] {
   const cx = canvasWidth / 2
   const cy = canvasHeight * 0.52
   const rx = canvasWidth * 0.36
-  const ry = canvasHeight * 0.28
+  const ry = canvasHeight * 0.30
   const positions: { x: number; y: number }[] = []
   for (let i = 0; i < count; i++) {
     const angle = (Math.PI * 2 * i) / count - Math.PI / 2
@@ -413,14 +416,14 @@ const arcPositions = computeArcLayout(workerDefs.length)
 let _wi = 0
 defaultAgentsConfig.forEach(cfg => {
   const pos = cfg.category === 'supervisor'
-    ? { x: canvasWidth / 2, y: 70 }
+    ? { x: canvasWidth / 2, y: 60 }
     : arcPositions[_wi++]
   agentsRegistry[cfg.name] = { ...cfg, pos, calls: 0, tokens: 0, totalMs: 0, avgMs: 0, isActive: false, lastPreview: '' }
 })
 
 // ── 计算属性 ──
 const supervisorData = computed(() => agentsRegistry['supervisor'])
-const supervisorPos = computed(() => ({ x: canvasWidth / 2, y: 70 }))
+const supervisorPos = computed(() => ({ x: canvasWidth / 2, y: 60 }))
 const workerAgents = computed(() => Object.values(agentsRegistry).filter(a => a.category === 'worker'))
 const allAgents = computed(() => Object.values(agentsRegistry))
 const selectedAgentDetail = computed(() => selectedAgent.value ? agentsRegistry[selectedAgent.value] : null)
@@ -510,9 +513,13 @@ function formatDuration(ms: number): string {
 let currentActiveAgent = 'supervisor'
 let lastTraceTimestamp = Date.now()
 
-watch(() => chatStore.isStreaming, streaming => {
+watch(() => chatStore.isStreaming, (streaming, prev) => {
   isSystemActive.value = streaming
   if (streaming && !animationFrameId) animationFrameId = requestAnimationFrame(runParticleAnimation)
+  // 对话结束 → 拉取真实 Agent 调用链（含后端统计的真实 token / 耗时）覆盖 SSE 估算轨迹
+  if (!streaming && prev) {
+    setTimeout(() => { loadLatestTrace() }, 600)
+  }
 })
 
 watch(
@@ -611,6 +618,68 @@ function quickChat(agentName: string, keyword: string) {
   router.push({ path: '/chat', query: { prompt, agent: agentName } })
 }
 
+// ── 真实 Agent 调用链追踪 (GET /api/agent-trace/latest) ──
+// 后端约定 thread_id = `user-{user_id}`（见 chat.py），用真实调用链替换 SSE 估算轨迹
+async function loadLatestTrace() {
+  let uid = userStore.userInfo?.id
+  if (!uid) {
+    try { await userStore.fetchUserInfo() } catch { /* 未登录则跳过 */ }
+    uid = userStore.userInfo?.id
+  }
+  if (!uid) return
+  try {
+    const { data } = await api.get('/agent-trace/latest', {
+      params: { thread_id: `user-${uid}` },
+    })
+    applyLatestTrace(data)
+  } catch (error) {
+    console.warn('AgentCenter: 获取最新调用链追踪失败', error)
+  }
+}
+
+// 将后端 TraceResponse 渲染到拓扑图：调用轨迹 + 各 Agent 真实指标
+function applyLatestTrace(data: any) {
+  const chain: any[] = data?.call_chain || []
+  const edges: any[] = data?.edges || []
+  // 无真实追踪数据（新用户 / 服务重启后内存 checkpoint 丢失）→ 保留历史派生状态
+  if (!chain.length) return
+
+  // 1) 用真实节点指标更新各 Agent（token / 平均耗时 / 输出预览 均来自后端真实统计）
+  const nodeByAgent: Record<string, any> = {}
+  chain.forEach((n: any) => {
+    nodeByAgent[n.agent] = n
+    const a = agentsRegistry[n.agent]
+    if (!a) return
+    a.tokens = (n.input_tokens || 0) + (n.output_tokens || 0)
+    a.avgMs = Math.round(n.duration_ms || 0)
+    a.totalMs = a.avgMs
+    if (n.output_preview) a.lastPreview = n.output_preview
+    if (n.display_name) a.label = n.display_name
+  })
+
+  // 2) 用真实 edges 重建调用轨迹（替换 SSE 估算 tokens=0 的占位轨迹）
+  const baseTs = Date.now()
+  traces.value = edges.map((e: any, i: number) => {
+    const tNode = nodeByAgent[e.target]
+    return {
+      id: i + 1,
+      from: e.source,
+      to: e.target,
+      durationMs: Math.round(tNode?.duration_ms || 0),
+      tokens: tNode ? (tNode.input_tokens || 0) + (tNode.output_tokens || 0) : 0,
+      timestamp: baseTs + i,
+      isNew: false,
+    }
+  })
+  traceCounter = traces.value.length  // 后续 SSE 轨迹从此处继续递增 id，避免冲突
+
+  // 高亮本次调用链中出现的 Agent 节点
+  const usedAgents: string[] = data?.agents_used || chain.map((n: any) => n.agent)
+  Object.values(agentsRegistry).forEach(a => { a.isActive = false })
+  usedAgents.forEach((name: string) => { if (agentsRegistry[name]) agentsRegistry[name].isActive = true })
+  if (agentsRegistry['supervisor']) agentsRegistry['supervisor'].isActive = true
+}
+
 onMounted(async () => {
   try {
     const [manifestResult, historyResult] = await Promise.all([
@@ -672,6 +741,9 @@ onMounted(async () => {
     sessionStats.activeAgents = Object.keys(agentCallCounts).length
     sessionStats.totalTokens = historyList.length  // 历史消息总数
 
+    // 拉取最近一次真实 Agent 调用链 → 用真实 token/耗时/轨迹覆盖历史估算
+    await loadLatestTrace()
+
   } catch (error) {
     console.warn('AgentCenter: 历史数据加载异常', error)
   }
@@ -706,12 +778,12 @@ onUnmounted(() => {
   background: #F8FAFC;
 }
 
-/* 工具条：三段式布局 */
+/* 工具条：三段式布局（优化：更紧凑） */
 .topology-toolbar {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 8px 20px; background: #fff;
+  padding: 6px 18px; background: #fff;
   flex-shrink: 0;
-  gap: 16px;
+  gap: 14px;
 }
 .toolbar-left { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #334155; flex-shrink: 0; }
 .toolbar-center { flex: 1; display: flex; justify-content: center; }
@@ -751,51 +823,51 @@ onUnmounted(() => {
   font-size: 9px; font-weight: 700; display: flex; align-items: center; justify-content: center;
 }
 
-/* ═══ 浮动统计卡片 ═══ */
+/* ═══ 浮动统计卡片（左上角） ═══ */
 .floating-stats {
-  position: absolute; top: 16px; left: 16px; z-index: 10;
-  background: rgba(255,255,255,.92); backdrop-filter: blur(8px);
-  border: 1px solid #E2E8F0; border-radius: 12px;
-  padding: 12px 16px; min-width: 260px;
-  box-shadow: 0 4px 16px rgba(0,0,0,.06);
+  position: absolute; top: 12px; left: 12px; z-index: 10;
+  background: rgba(255,255,255,.96); backdrop-filter: blur(12px);
+  border: 1.5px solid #CBD5E1; border-radius: 12px;
+  padding: 12px 16px; min-width: 240px;
+  box-shadow: 0 4px 20px rgba(0,0,0,.08);
 }
 .float-stat-title {
-  display: flex; align-items: center; gap: 6px;
-  font-size: 11px; font-weight: 600; color: #64748B;
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; font-weight: 600; color:#334155;
   margin-bottom: 8px; padding-bottom: 6px;
   border-bottom: 1px dashed #E2E8F0;
 }
 .float-stats-row { display: flex; align-items: center; gap: 8px; }
 .float-stat-item { text-align: center; flex: 1; }
-.float-num { display: block; font-size: 17px; font-weight: 700; color: #1E293B; line-height: 1.2; }
-.float-label { display: block; font-size: 9px; color: #94A3B8; margin-top: 2px; }
+.float-num { display: block; font-size: 18px; font-weight: 800; color: #1E293B; line-height: 1.2; }
+.float-label { display: block; font-size: 9px; color: #64748B; margin-top: 3px; }
 .float-stat-divider { width: 1px; height: 28px; background: #E8ECF1; }
 
-/* ═══ Canvas 区域 ═══ */
+/* ═══ Canvas 区域（优化：更大空间） ═══ */
 .topology-canvas-wrapper {
   flex: 1; min-height: 0;
   display: flex; align-items: center; justify-content: center;
-  padding: 20px; overflow: hidden;
+  padding: 6px 10px; overflow: hidden;
   position: relative;
 }
 .topology-svg {
   width: 100%; height: 100%;
-  max-width: 720px; max-height: 420px;
-  filter: drop-shadow(0 2px 8px rgba(0,0,0,.04));
+  max-width: 820px; max-height: 480px;
+  filter: drop-shadow(0 2px 6px rgba(0,0,0,.03));
 }
 
 /* SVG 节点样式 */
 .node-group { cursor: pointer; }
 .node-shape { transition: all 0.3s ease; }
 .node-group:hover .node-shape { filter: brightness(0.97); }
-.node-group.active .node-shape { filter: drop-shadow(0 0 8px rgba(37,99,235,.25)); }
+.node-group.active .node-shape { filter: drop-shadow(0 0 10px rgba(37,99,235,.35)); }
 .node-group.selected .node-shape { stroke-width: 2.5; }
 .node-icon-container {
   display: flex; align-items: center; justify-content: center;
   width: 100%; height: 100%;
 }
-.node-text-label { font-size: 11px; font-weight: 600; }
-.node-role-text { font-size: 9px; }
+.node-text-label { font-size: 12px; font-weight: 700; letter-spacing: 0.2px; }
+.node-role-text { font-size: 9px; font-weight: 500; }
 
 .pulse-ring-anim { transform-origin: center; animation: ringPulseAnim 2s infinite; }
 @keyframes ringPulseAnim {
@@ -807,10 +879,10 @@ onUnmounted(() => {
 @keyframes edgeFlash { 0% { opacity: 1; } 100% { opacity: 0.55; } }
 .data-particle { pointer-events: none; }
 
-/* ═══ Trace Panel ═══ */
+/* ═══ Trace Panel（优化：更紧凑） ═══ */
 .trace-panel {
   flex-shrink: 0; background: #F0F4FF;
-  height: 140px; min-height: 80px; max-height: 170px;
+  height: 110px; min-height: 70px; max-height: 140px;
   display: flex; flex-direction: column;
   overflow: hidden;
 }
