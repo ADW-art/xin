@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     spark_app_password: str = ""  # HTTP接口 Bearer Token (APPPassword)
     spark_model: str = "lite"  # lite / pro / max / 4.0Ultra（根据API Key权限选择）
 
+    # 讯飞TTS (单独的应用凭据)
+    tts_app_id: str = ""
+    tts_api_key: str = ""
+    tts_api_secret: str = ""
+
     # MySQL
     mysql_host: str = "localhost"
     mysql_port: int = 3306
