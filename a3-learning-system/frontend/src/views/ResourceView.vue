@@ -95,7 +95,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowRight, WarningFilled, Delete, Search } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -172,6 +172,13 @@ async function loadResources() {
 }
 
 onMounted(loadResources)
+
+onBeforeUnmount(() => {
+  if (_searchTimer) {
+    clearTimeout(_searchTimer)
+    _searchTimer = null
+  }
+})
 
 // 删除资源（真实调用 DELETE /api/resources/{id}）
 async function onDelete(r: ResourceDisplayItem) {
@@ -456,5 +463,22 @@ async function onDelete(r: ResourceDisplayItem) {
   .page { padding: 20px 16px 40px; }
   .r-card { padding: 18px 16px; gap: 14px; }
   .r-icon { width: 42px; height: 42px; }
+}
+
+@media (max-width: 480px) {
+  .page { padding: 12px 10px 32px; }
+  .hero { margin-bottom: 18px; }
+  .hero h1 { font-size: 20px; }
+  .hero p { font-size: 12px; }
+  .resource-search { max-width: 100%; }
+  .r-card { padding: 14px 12px; gap: 12px; border-radius: var(--radius-md); }
+  .r-icon { width: 38px; height: 38px; }
+  .r-icon .el-icon { font-size: 16px; }
+  .r-title { font-size: 13px; }
+  .r-type { font-size: 10px; }
+  .r-meta { font-size: 10px; }
+  .r-del { width: 26px; height: 26px; }
+  .skel-card { padding: 12px 14px; }
+  .empty { padding: 40px 0; }
 }
 </style>

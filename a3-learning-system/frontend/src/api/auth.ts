@@ -58,3 +58,8 @@ export async function getMe(): Promise<UserInfo> {
   const response = await api.get<UserInfo>('/auth/me')
   return response.data
 }
+
+// 登出：通知后端将当前 token 加入黑名单（需要 JWT）
+export async function logout(): Promise<void> {
+  await api.post('/auth/logout')
+}

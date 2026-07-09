@@ -4,10 +4,11 @@
     <el-drawer
       v-model="sidebarOpen"
       direction="ltr"
-      :size="300"
+      :size="320"
       :with-header="false"
       :append-to-body="true"
       :modal="true"
+      @open="fetchHistory"
     >
       <div class="drawer-inner">
         <div class="drawer-header">
@@ -28,8 +29,11 @@
           </div>
         </div>
 
-        <div v-if="historyLoading" class="sb-state">
-          <el-icon class="spinner"><Loading /></el-icon>
+        <div v-if="historyLoading" class="history-list">
+          <div v-for="n in 4" :key="n" class="history-item skeleton-item">
+            <div class="skeleton-bar skeleton-bar--short"></div>
+            <div class="skeleton-bar skeleton-bar--long"></div>
+          </div>
         </div>
         <div v-else-if="historyError" class="sb-state error">
           <span>{{ historyError }}</span>
@@ -48,7 +52,7 @@
             <div class="hi-header">
               <span class="hi-date">{{ convo.dateLabel }}</span>
               <span v-if="convo.agentType" class="hi-agent" :style="{ color: agentColor(convo.agentType) }">
-                {{ convo.agentType }}
+                {{ agentLabel(convo.agentType) }}
               </span>
               <el-button
                 text
@@ -60,7 +64,8 @@
                 <el-icon :size="14"><Close /></el-icon>
               </el-button>
             </div>
-            <div class="hi-text">{{ convo.preview }}</div>
+            <div class="hi-title">{{ convo.title }}</div>
+            <div v-if="convo.assistantPreview" class="hi-preview">{{ convo.assistantPreview }}</div>
           </div>
         </div>
       </div>
@@ -86,12 +91,47 @@
           <el-icon :size="14"><Close /></el-icon>
           停止生成
         </el-button>
-        <div class="topbar-status">
+        
+          <el-tooltip content="自动朗读" placement="bottom">
+            <el-button text size="small" @click="autoRead = !autoRead" class="autoread-btn">
+              <el-icon :size="16"><Microphone /></el-icon>
+            </el-button>
+          </el-tooltip>
+          <div class="topbar-status">
           <span class="status-dot" :class="{ generating: store.isStreaming }"></span>
           <span class="status-text">{{ store.isStreaming ? '生成中...' : 'AI 在线' }}</span>
         </div>
       </div>
     </div>
+
+    <!-- ══ 错误提示横幅（SSE 连接失败） ══ -->
+    <transition name="banner-fade">
+      <el-alert
+        v-if="sendError"
+        type="error"
+        :title="sendError"
+        show-icon
+        closable
+        @close="sendError = ''"
+        class="send-error-banner"
+      >
+        <template #default>
+          <el-button size="small" type="primary" plain @click="retrySend" :disabled="store.isStreaming">
+            重新发送
+          </el-button>
+        </template>
+      </el-alert>
+    </transition>
+
+    <!-- ══ 发送中加载指示器（消息已发送，等待首个响应） ══ -->
+    <transition name="progress-fade">
+      <div v-if="sendingLoading && store.isStreaming" class="sending-indicator">
+        <div class="sending-bar-inner">
+          <span class="sending-dot-pulse"></span>
+          <span class="sending-text">AI 正在思考...</span>
+        </div>
+      </div>
+    </transition>
 
     <!-- ══ 进度条（Agent生成资源时显示） ══ -->
     <transition name="progress-fade">
@@ -112,6 +152,16 @@
 
     <!-- ══ 消息列表（弹性占据剩余空间） ══ -->
     <div class="messages" ref="listRef" @scroll="onScroll">
+      <!-- 多Agent协同标签 -->
+      <transition name="collab-fade">
+        <div v-if="collabBanner" class="collab-banner">
+          <span class="collab-icon-wrapper"><el-icon :size="14"><Connection /></el-icon></span>
+          <span class="collab-label">多Agent协同模式</span>
+          <span class="collab-mode">{{ collabModeLabel(collabBanner.mode) }}</span>
+          <span class="collab-agent">{{ agentLabel(collabBanner.agent) }}</span>
+        </div>
+      </transition>
+
       <!-- 空状态：更好的欢迎界面 -->
       <div v-if="store.messages.length === 0" class="empty">
         <div class="empty-icon">
@@ -168,6 +218,7 @@
           :resource-type="msg.resourceType"
           :resource-id="msg.resourceId"
           :resource-title="msg.resourceTitle"
+           :collab-agents="msg.collabAgents"
           :class="['msg-enter', { 'msg-streaming': msg.id === streamingId && store.isStreaming }]"
           :style="{ animationDelay: idx < 2 ? '0ms' : Math.min(idx * 50, 300) + 'ms' }"
         />
@@ -193,7 +244,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick, onMounted } from 'vue'
+import { ref, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useChatStore } from '@/stores/chat'
 import { sendMessageStream } from '@/api/chat'
@@ -202,6 +253,7 @@ import ChatMessage from '@/components/chat/ChatMessage.vue'
 import ChatInput from '@/components/chat/ChatInput.vue'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import api from '@/api/index'
+import { synthesizeSpeech } from '@/api/tts'
 import dayjs from 'dayjs'
 
 interface HistoryItem {
@@ -219,14 +271,20 @@ interface ConvoGroup {
   agentType: string | null
   createdAt: string
   dateLabel: string
-  preview: string
-  messageIds?: number[]
+  title: string
+  assistantPreview: string
+  messageIds: number[]
   _deleting?: boolean
 }
 
 const store = useChatStore()
 const listRef = ref<HTMLElement>()
 const streamingId = ref('')
+const autoRead = ref(false)
+
+// ── 全局错误 / 发送中状态 ──
+const sendError = ref('')
+const sendingLoading = ref(false)
 
 const sidebarOpen = ref(false)
 const historyLoading = ref(false)
@@ -259,6 +317,27 @@ const progressMessage = ref('')
 const progressColor = ref('#2563EB')
 let _progressTimer: ReturnType<typeof setTimeout> | null = null
 
+// ── Collaboration badge ──
+const collabBanner = ref<{ mode: string; agent: string } | null>(null)
+let _collabTimer: ReturnType<typeof setTimeout> | null = null
+
+function collabModeLabel(mode: string): string {
+  const map: Record<string, string> = {
+    qa_parallel: '出题 + 审题',
+    resource_parallel: '生成 + 质检',
+    path_parallel: '规划 + 预生成',
+  }
+  return map[mode] || mode
+}
+
+function showCollaboration(mode: string, agent: string) {
+  if (_collabTimer) clearTimeout(_collabTimer)
+  collabBanner.value = { mode, agent }
+  _collabTimer = setTimeout(() => {
+    collabBanner.value = null
+  }, 4000)
+}
+
 function showProgress(agent: string, percent: number, message: string) {
   if (_progressTimer) clearTimeout(_progressTimer)
   progressAgent.value = agentLabel(agent)
@@ -282,8 +361,20 @@ function agentLabel(agent: string): string {
     question_agent: '出题',
     path_agent: '路径规划',
     evaluation_agent: '学习评估',
+    collaborative_qa: '出题+审题',
+    collaborative_resource: '生成+质检',
+    collaborative_path: '规划+预生成',
+    chat_agent: '学习助手',
   }
   return map[agent] || agent
+}
+
+function formatDateLabel(dateStr: string): string {
+  const now = dayjs()
+  const date = dayjs(dateStr)
+  if (date.isSame(now, 'day')) return '今天'
+  if (date.isSame(now.subtract(1, 'day'), 'day')) return '昨天'
+  return date.format('MM-DD')
 }
 
 function groupMessages(items: HistoryItem[]): ConvoGroup[] {
@@ -295,12 +386,18 @@ function groupMessages(items: HistoryItem[]): ConvoGroup[] {
     const assistant = items[i + 1]
     const asstMsg = assistant && assistant.role === 'assistant' ? assistant.content : ''
     const asstAgent = assistant && assistant.role === 'assistant' ? assistant.agent_type : null
-    // Clean title: strip common prefixes for better readability
+    // Title: first 30 chars of first user message, strip common prefixes
     let title = user.content.replace(/^(教我|解释|什么是|帮我|给我|我想学|我要学|写一个|写一段|生成|请|麻烦|帮我|给我讲|讲一下)/, '').trim()
     if (title.length > 30) title = title.slice(0, 30) + '...'
     if (!title) title = user.content.slice(0, 30)
-    const preview = title
-    const dateLabel = dayjs(user.created_at).format('MM-DD HH:mm')
+    // Preview: last message (assistant reply), truncated
+    let assistantPreview = ''
+    if (asstMsg) {
+      assistantPreview = asstMsg.length > 50 ? asstMsg.slice(0, 50) + '...' : asstMsg
+    }
+    const dateLabel = formatDateLabel(user.created_at)
+    const messageIds: number[] = [user.id]
+    if (asstMsg && assistant) messageIds.push(assistant.id)
     groups.push({
       id: user.id,
       userMessage: user.content,
@@ -308,7 +405,9 @@ function groupMessages(items: HistoryItem[]): ConvoGroup[] {
       agentType: asstAgent,
       createdAt: user.created_at,
       dateLabel,
-      preview,
+      title,
+      assistantPreview,
+      messageIds,
     })
     i += asstMsg ? 2 : 1
   }
@@ -411,10 +510,28 @@ function handleNewChat() {
   store.clearMessages()
   activeConvoId.value = null
   streamingId.value = ''
+  sidebarOpen.value = false
 }
 
 function quickAsk(text: string) {
   handleSend(text)
+}
+
+// Retry: re-send the last user message after an error
+function retrySend() {
+  const msgs = store.messages
+  let lastUserMsg = ''
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].role === 'user') { lastUserMsg = msgs[i].content; break }
+  }
+  if (!lastUserMsg) return
+  sendError.value = ''
+  // Remove the failed assistant reply if it's the last message
+  const lastMsg = msgs[msgs.length - 1]
+  if (lastMsg.role === 'assistant') {
+    msgs.pop()
+  }
+  handleSend(lastUserMsg)
 }
 
 // Re-generate: remove last AI reply and re-send the user message that triggered it
@@ -441,12 +558,158 @@ interface ChatImage {
   type: string
 }
 
+// ── SSE Event Handlers (extracted from onChunk callback for maintainability) ──
+
+function handleProgress(data: any) {
+  if (data.stage === 'generating') {
+    showProgress(data.agent || 'resource_agent', data.progress || 0, data.content || data.message || '')
+  } else if (data.stage === 'complete') {
+    hideProgress()
+  }
+}
+
+function handleAgentSwitch(data: any) {
+  store.setAgentSwitch(data.from, data.to)
+}
+
+function handleResourceMeta(data: any) {
+  store.setResource(data.resource_type, data.resource_id || 0, data.title || '学习资源')
+}
+
+  function handleResourceReady(data: any) {
+    const rid = data.resource_id || 0
+    if (rid && store.messages.length > 0) {
+      const msgs = store.messages
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].role === 'assistant') {
+          msgs[i].resourceType = data.resource_type || msgs[i].resourceType || 'document'
+          msgs[i].resourceId = rid
+          msgs[i].resourceTitle = data.title || msgs[i].resourceTitle || '学习资源'
+          if (!msgs[i].agent) msgs[i].agent = 'resource_agent'
+          break
+        }
+      }
+    }
+  }
+function handleSuggestion(data: any) {
+  const routes: Record<string, string> = {
+    evaluation: '/assessment', resource: '/chat', question: '/chat', path: '/chat', profile: '/profile'
+  }
+  const labels: Record<string, string> = {
+    evaluation: '去做评估', resource: '去学习', question: '去练习', path: '去规划', profile: '完善画像'
+  }
+  ElNotification({
+    title: '智能推荐',
+    message: data.reason || '系统根据你的学习状态推荐下一步操作',
+    type: 'info',
+    duration: 5000,
+    onClick: () => {
+      const intent = data.intent || ''
+      const to = routes[intent] || '/chat'
+      if (intent !== 'profile') {
+        router.push({ path: '/chat', query: { prompt: data.reason || '' } })
+      } else {
+        router.push(to)
+      }
+    },
+  })
+}
+
+function handleCollaboration(data: any) {
+  // Handle parallel action (from collaboration.py ThreadPoolExecutor)
+  if (data.action === "parallel") {
+    const agentList = data.agents || []
+    if (agentList.length > 0) {
+      const msgs = store.messages
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].role === "assistant") {
+          msgs[i].collabAgents = agentList
+          break
+        }
+      }
+    }
+    // Update collaboration banner with agent names
+    const names = agentList.map(function(a: string) { return agentLabel(a) })
+    showCollaboration("parallel", names.join(" + "))
+    return
+  }
+  // Show banner (existing logic)
+  showCollaboration(data.mode, data.agent || '')
+
+  // Add system message showing collaboration detail
+  const modeLabel = collabModeLabel(data.mode)
+  const agents = data.agents ? data.agents.join(' + ') : (data.agent ? agentLabel(data.agent) : '多Agent')
+  let sysMsg = `${modeLabel} — ${agents} 协同完成`
+  if (data.quality_score != null) {
+    sysMsg += `（质量评分: ${data.quality_score}）`
+  }
+  store.addSystemMessage(sysMsg)
+  scroll()
+}
+
+function handlePathUpdate(data: any) {
+  const skipped = data.skipped?.length ? data.skipped.join('、') : '无'
+  const unlocked = data.new_unlocked?.length ? data.new_unlocked.join('、') : '无'
+  const currentNode = data.current_node || '未知'
+  store.addSystemMessage(
+    `学习路径已自动更新：已掌握跳过【${skipped}】，新解锁【${unlocked}】，下一学习节点【${currentNode}】(${(data.current_index ?? 0) + 1}/${data.total_nodes ?? '?'})`,
+    'path_agent',
+  )
+  window.dispatchEvent(new CustomEvent('path-replanned', { detail: data }))
+  scroll()
+}
+
+function handleReviewDue(data: any) {
+  const total = data.total as number
+  const highRisk = (data.high_risk as number) || 0
+  const items = data.items || []
+
+  // 方案B: ElNotification 桌面通知
+  let notifyMsg = `你有 ${total} 个知识点需要复习`
+  if (highRisk > 0) {
+    notifyMsg += `，其中 ${highRisk} 个已进入遗忘高风险区`
+  }
+  ElNotification({
+    title: '复习提醒',
+    message: notifyMsg,
+    type: highRisk > 0 ? 'warning' : 'info',
+    duration: 6000,
+    onClick: () => router.push('/'),
+  })
+
+  // 方案C: 浏览器原生 Notification API
+  if ('Notification' in window && Notification.permission === 'granted') {
+    new Notification('A3学习助手', {
+      body: `你有 ${total} 个知识点需要复习${highRisk > 0 ? `，${highRisk} 个高风险` : ''}`,
+      icon: '/favicon.ico',
+      tag: 'review-due',
+    })
+  }
+
+  // 广播到 Dashboard 实时更新待复习卡片
+  window.dispatchEvent(new CustomEvent('review-due', {
+    detail: { total, high_risk: highRisk, items },
+  }))
+}
+
+function handleTextMessage(data: any) {
+  const text = data.content || ''
+  if (text) {
+    store.appendToStreaming(text, data.agent)
+  }
+  scroll()
+}
+
 function handleSend(content: string, images?: ChatImage[]) {
   if (store.isStreaming) return
   if (_sending) return  // 防抖：冷却期内不重复发送
 
   _sending = true
   setTimeout(() => { _sending = false }, SEND_COOLDOWN)
+
+  // 清除上一次的错误状态，标记发送中
+  sendError.value = ''
+  sendingLoading.value = true
 
   // 将图片附加到用户消息（用于前端展示）
   const imageUrls = images?.map(img => img.url) || []
@@ -465,60 +728,19 @@ function handleSend(content: string, images?: ChatImage[]) {
   abortCtrl.value = sendMessageStream(
     content,
     (data: SSEChunk) => {
-      // ── Progress event ──
-      if (data.type === 'progress' && data.stage) {
-        if (data.stage === 'generating') {
-          showProgress(data.agent || 'resource_agent', data.progress || 0, data.content || data.message || '')
-        } else if (data.stage === 'complete') {
-          hideProgress()
-        }
-        return
-      }
+      // ── 首次收到数据，清除发送中加载状态 ──
+      if (sendingLoading.value) sendingLoading.value = false
 
-      // ── Agent 切换：更新当前 Agent 显示，不创建新消息 ──
-      if (data.from && data.to) {
-        store.setAgentSwitch(data.from, data.to)
-        return
-      }
-
-      // ── 资源元数据：附加到当前流式消息 ──
-      if (data.type === 'resource' && data.resource_type) {
-        store.setResource(data.resource_type, data.resource_id || 0, data.title || '学习资源')
-        return
-      }
-
-      // ── 智能建议推送：Agent分析完成后的下一步推荐 ──
-      if (data.type === 'suggestion' && data.intent) {
-        const routes: Record<string, string> = {
-          evaluation: '/assessment', resource: '/chat', question: '/chat', path: '/chat', profile: '/profile'
-        }
-        const labels: Record<string, string> = {
-          evaluation: '去做评估', resource: '去学习', question: '去练习', path: '去规划', profile: '完善画像'
-        }
-        ElNotification({
-          title: '智能推荐',
-          message: data.reason || '系统根据你的学习状态推荐下一步操作',
-          type: 'info',
-          duration: 5000,
-          onClick: () => {
-            const intent = data.intent || ''
-            const to = routes[intent] || '/chat'
-            if (intent !== 'profile') {
-              router.push({ path: '/chat', query: { prompt: data.reason || '' } })
-            } else {
-              router.push(to)
-            }
-          },
-        })
-        return
-      }
-
-      // ── 普通文本内容：追加到当前流式消息 ──
-      const text = data.content || ''
-      if (text) {
-        store.appendToStreaming(text, data.agent)
-      }
-      scroll()
+      // Dispatch to extracted handlers
+      if (data.type === 'progress') handleProgress(data)
+      else if (data.from && data.to) handleAgentSwitch(data)
+              else if (data.type === 'resource') handleResourceMeta(data)
+        else if (data.type === 'resource_ready') handleResourceReady(data)
+      else if (data.type === 'suggestion') handleSuggestion(data)
+      else if (data.type === 'collaboration') handleCollaboration(data)
+      else if (data.type === 'path_update') handlePathUpdate(data)
+      else if (data.type === 'review_due') handleReviewDue(data)
+      else handleTextMessage(data)
     },
     () => {
       store.finishAssistantReply()
@@ -527,9 +749,20 @@ function handleSend(content: string, images?: ChatImage[]) {
       hideProgress()
       scroll()
       fetchHistory()
+  // Auto-TTS if enabled
+  if (autoRead.value && store.messages.length > 0) {
+    const lastMsg = store.messages[store.messages.length - 1]
+    if (lastMsg.role === "assistant" && lastMsg.content) {
+      synthesizeSpeech(lastMsg.content).then(function(url) {
+        if (url) new Audio(url).play()
+      }).catch(function() {})
+    }
+  }
     },
     (err) => {
+      sendingLoading.value = false
       if (err.name !== 'AbortError') {
+        sendError.value = '回复生成失败，请检查网络连接后重试'
         store.appendToStreaming(`\n\n> 回复生成中断，请稍后重试`)
       }
       store.finishAssistantReply()
@@ -569,6 +802,15 @@ const router = useRouter()
 
 onMounted(() => {
   fetchHistory()
+  // Auto-TTS if enabled
+  if (autoRead.value && store.messages.length > 0) {
+    const lastMsg = store.messages[store.messages.length - 1]
+    if (lastMsg.role === "assistant" && lastMsg.content) {
+      synthesizeSpeech(lastMsg.content).then(function(url) {
+        if (url) new Audio(url).play()
+      }).catch(function() {})
+    }
+  }
   // 处理从 AgentCenter 关键词点击过来的预设提示词
   const prompt = route.query.prompt as string
   if (prompt) {
@@ -577,6 +819,11 @@ onMounted(() => {
     // 清除 URL 参数避免刷新重复发送
     router.replace({ path: '/chat', query: {} })
   }
+})
+
+onBeforeUnmount(() => {
+  if (_progressTimer) clearTimeout(_progressTimer)
+  if (_collabTimer) clearTimeout(_collabTimer)
 })
 </script>
 
@@ -646,8 +893,12 @@ onMounted(() => {
 }
 .hi-header { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; }
 .hi-date { font-size: 12px; color: var(--text-muted); font-weight: 500; }
-.hi-agent { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; }
-.hi-text { font-size: 13px; color: var(--text-secondary); line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hi-agent { font-size: 11px; font-weight: 600; }
+.hi-delete-btn { opacity: 0; transition: opacity .2s; margin-left: auto; padding: 2px !important; min-height: auto !important; }
+.history-item:hover .hi-delete-btn { opacity: 0.65; }
+.hi-delete-btn:hover { opacity: 1 !important; color: var(--red) !important; }
+.hi-title { font-size: 14px; color: var(--text-primary); font-weight: 600; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 1px; }
+.hi-preview { font-size: 12px; color: var(--text-muted); line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .sb-state {
   display: flex;
@@ -660,7 +911,14 @@ onMounted(() => {
 }
 .sb-state.error { color: var(--red); }
 .sb-empty-text { font-size: 13px; color: var(--text-muted); }
-.spinner { animation: spin 1s linear infinite; }
+.skeleton-item { cursor: default !important; border-color: transparent !important; background: transparent !important; }
+.skeleton-bar { height: 10px; background: var(--bg-muted); border-radius: 4px; animation: skeleton-pulse 1.5s ease-in-out infinite; }
+.skeleton-bar--short { width: 38%; margin-bottom: 8px; }
+.skeleton-bar--long { width: 72%; }
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 0.75; }
+}
 
 /* ═══ Topbar ═══ */
 .chat-topbar {
@@ -759,6 +1017,107 @@ onMounted(() => {
   font-size: 11px !important;
   font-weight: 600 !important;
 }
+
+/* ═══ Collaboration Banner ═══ */
+.collab-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  margin-bottom: 8px;
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.08) 0%, rgba(59, 130, 246, 0.08) 100%);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+.collab-icon-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(16, 185, 129, 0.12);
+  color: #10B981;
+  flex-shrink: 0;
+}
+.collab-label {
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+.collab-mode {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(16, 185, 129, 0.12);
+  color: #10B981;
+  font-weight: 700;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.collab-agent {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+.collab-fade-enter-active { transition: all 0.35s ease; }
+.collab-fade-leave-active { transition: all 0.4s ease; }
+.collab-fade-enter-from,
+.collab-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+
+/* ═══ Send Error Banner ═══ */
+.send-error-banner {
+  flex-shrink: 0;
+  margin: 0 24px;
+  border-radius: var(--radius-md);
+}
+.send-error-banner :deep(.el-alert__content) {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.banner-fade-enter-active { transition: all 0.3s ease; }
+.banner-fade-leave-active { transition: all 0.3s ease; }
+.banner-fade-enter-from,
+.banner-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+/* ═══ Sending Loading Indicator ═══ */
+.sending-indicator {
+  flex-shrink: 0;
+  padding: 6px 24px;
+  background: rgba(37,99,235,.03);
+  border-bottom: 1px solid rgba(37,99,235,.08);
+}
+.sending-bar-inner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--primary);
+  font-weight: 500;
+}
+.sending-dot-pulse {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--primary);
+  animation: pulse-dot 1.2s ease-in-out infinite;
+}
+.sending-text {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
 .progress-fade-enter-active { transition: all 0.3s ease; }
 .progress-fade-leave-active { transition: all 0.3s ease; }
 .progress-fade-enter-from,
@@ -939,5 +1298,37 @@ onMounted(() => {
   .progress-bar-wrap {
     padding: 8px 14px 6px;
   }
+  .chat-topbar { padding: 8px 14px; flex-wrap: wrap; gap: 8px; }
+  .empty { padding: 32px 16px 40px; }
+  .empty h3 { font-size: 18px; }
+  .empty p { font-size: 13px; }
+  .suggestion-tag { padding: 7px 12px; font-size: 11px; }
+  .history-toggle-btn { font-size: 12px; padding: 6px 12px; }
+  .history-toggle-btn span { display: none; }
+  .send-error-banner { margin: 0 14px; }
+  .collab-banner { margin: 0 8px; padding: 6px 12px; }
+  .collab-mode, .collab-agent { font-size: 10px; }
+  .sending-indicator { padding: 6px 14px; }
+}
+
+@media (max-width: 480px) {
+  .chat-layout { position: fixed; inset: 0; }
+  .chat-topbar { padding: 6px 10px; }
+  .messages { padding: 10px 10px 4px; }
+  .progress-bar-wrap { padding: 6px 10px 4px; }
+  .empty { padding: 24px 12px 32px; }
+  .empty h3 { font-size: 16px; }
+  .empty p { font-size: 12px; }
+  .empty-icon { width: 56px; height: 56px; }
+  .empty-icon svg { width: 36px; height: 36px; }
+  .empty-suggestions { gap: 6px; }
+  .suggestion-tag { padding: 6px 10px; font-size: 10px; gap: 4px; }
+  .feature-item { padding: 8px 10px; }
+  .scroll-bottom-btn { bottom: 10px; right: 12px; width: 32px; height: 32px; }
+  .regenerate-wrap { padding: 4px 12px 0; }
+  .history-toggle-btn { font-size: 11px; padding: 5px 10px; }
+  .topbar-status { font-size: 10px; }
+  .progress-agent { font-size: 10px; }
+  .progress-msg { font-size: 10px; }
 }
 </style>

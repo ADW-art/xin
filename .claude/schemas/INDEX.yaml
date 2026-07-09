@@ -1,0 +1,51 @@
+﻿# Schema INDEX — Agent间通信协议
+# 遵循 Governance Engineering v1.3 标准
+
+schemas:
+  confirm_result:
+    file: confirm_result.yaml
+    description: "需求确认输出 — 由 confirm-agent 生成"
+    produced_by: [confirm-agent]
+    consumed_by: [plan-agent, developer-agent]
+
+  explore_report:
+    file: explore_report.yaml
+    description: "代码探索报告 — 由 explore-agent 生成"
+    produced_by: [explore-agent]
+    consumed_by: [plan-agent, confirm-agent]
+
+  plan_result:
+    file: plan_result.yaml
+    description: "方案规划输出 — 由 plan-agent 生成"
+    produced_by: [plan-agent]
+    consumed_by: [developer-agent, test-agent]
+
+  developer_result:
+    file: developer_result.yaml
+    description: "代码实现输出 — 由 developer-agent 生成"
+    produced_by: [developer-agent]
+    consumed_by: [inspector-agent, test-agent, summarize-agent]
+
+  inspect_result:
+    file: inspect_result.yaml
+    description: "审查结果 — 由 inspector-agent 生成"
+    produced_by: [inspector-agent]
+    consumed_by: [summarize-agent]
+
+  test_result:
+    file: test_result.yaml
+    description: "测试结果 — 由 test-agent 生成"
+    produced_by: [test-agent]
+    consumed_by: [summarize-agent]
+
+  summarize_result:
+    file: summarize_result.yaml
+    description: "知识沉淀输出 — 由 summarize-agent 生成"
+    produced_by: [summarize-agent]
+    consumed_by: [agent-memory]
+
+  commit_result:
+    file: commit_result.yaml
+    description: "提交信息 — 由 commit-agent 生成"
+    produced_by: [commit-agent]
+    consumed_by: [git]

@@ -11,6 +11,7 @@
     {"id": "practice", "name": "工程实战", "order": 4, "blooms": "create"}
   ],
   "nodes": [
+    {"id": "py:basic", "name": "Python基础", "phase": "foundation", "difficulty": 1, "blooms": "remember/understand", "hours": 2, "description": "Python语言入门总览：语法特点、开发环境、基本编程概念", "keywords": ["Python基础", "Python入门", "Python语法", "Python简介", "编程入门"]},
     {"id": "py:env", "name": "Python环境搭建", "phase": "foundation", "difficulty": 1, "blooms": "apply", "hours": 2, "description": "安装Python解释器、配置IDE与虚拟环境", "keywords": ["Python安装", "环境配置", "IDE", "venv", "pip"]},
     {"id": "py:var", "name": "变量与数据类型", "phase": "foundation", "difficulty": 1, "blooms": "understand", "hours": 3, "description": "变量命名、数字/字符串/布尔类型、类型转换", "keywords": ["变量", "数据类型", "int", "str", "bool", "float", "type"]},
     {"id": "py:operator", "name": "运算符与表达式", "phase": "foundation", "difficulty": 1, "blooms": "apply", "hours": 2, "description": "算术/比较/逻辑/赋值运算符、运算符优先级", "keywords": ["运算符", "表达式", "加减乘除", "and", "or", "not"]},
@@ -38,6 +39,7 @@
     {"id": "py:project", "name": "项目结构与工程化", "phase": "practice", "difficulty": 3, "blooms": "create", "hours": 5, "description": "项目目录布局、setup.py/pyproject.toml、打包发布、版本管理、CI/CD基础", "keywords": ["项目结构", "打包", "发布", "setup", "版本", "CI", "工程化"]}
   ],
   "edges": [
+    {"source": "py:basic", "target": "py:env", "relation": "prerequisite"},
     {"source": "py:env", "target": "py:var", "relation": "prerequisite"},
     {"source": "py:var", "target": "py:operator", "relation": "prerequisite"},
     {"source": "py:operator", "target": "py:flow", "relation": "prerequisite"},
@@ -72,7 +74,7 @@
     {"source": "py:oop_inherit", "target": "frontend:js_class", "relation": "complements", "description": "面向对象概念可迁移到JavaScript/TypeScript类设计"},
     {"source": "algorithm:complexity", "target": "py:performance", "relation": "depends_on", "description": "算法复杂度分析是Python性能优化的理论基础"}
   ],
-  "nodes_count": 25,
-  "edges_count": 26,
+  "nodes_count": 26,
+  "edges_count": 27,
   "cross_edges_count": 5
 }

@@ -1,0 +1,14 @@
+﻿# VCS config
+vcs:
+  type: git
+  commands:
+    status: "git status"
+    diff: "git diff"
+    stage: "git add"
+    commit_base: "git commit"
+    commit_template: "git commit {files} -m {message}"
+  commit_args:
+    message_flag: "-m"
+    file_position: append
+  auto_mark: "[AI]"
+  commit_prefix: "[AI] "

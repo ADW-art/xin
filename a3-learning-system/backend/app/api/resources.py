@@ -79,10 +79,16 @@ def delete_resource(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """删除学习资源（仅限资源所属用户）"""
+    """删除学习资源（仅限资源所属用户）
+
+    P1-16: 同时删除关联的 NodeResource 记录，防止孤儿引用。
+    """
     r = db.query(Resource).filter(Resource.id == resource_id, Resource.user_id == current_user.id).first()
     if not r:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="资源不存在")
+    # 级联清理关联表中的记录
+    from app.models.node_resource import NodeResource
+    db.query(NodeResource).filter(NodeResource.resource_id == resource_id).delete()
     db.delete(r)
     db.commit()
     return DeleteResponse(deleted=True)

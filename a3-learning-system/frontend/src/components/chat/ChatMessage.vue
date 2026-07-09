@@ -10,6 +10,8 @@
       <!-- Agent header row -->
       <div v-if="agent && role === 'assistant'" class="ah">
         <span class="ah-name">{{ agentLabel(agent) }}</span>
+          <span v-if="collabAgents && collabAgents.length > 1" class="collab-badge">&#9889; {{ collabAgents.join(' + ') }}</span>
+          <span v-if="collabAgents && collabAgents.length > 1" class="collab-badge">&#9889; ??</span>
         <span v-if="resolvedResourceType" class="ah-badge" :class="resolvedResourceType">
           {{ resourceTypeLabel(resolvedResourceType) }}
         </span>
@@ -24,12 +26,70 @@
             :key="idx"
             :src="src"
             :alt="'图片'+(idx+1)"
-            class="msg-img"
-            @click="previewImage(src)"
+            class="msg-img image-card"
+            @click="openLightbox(src)"
           />
         </div>
-        <div v-html="rendered" />
-        <span v-if="isStreaming" class="cursor">|</span>
+
+        <!-- 非流式：按文本/代码段渲染 -->
+        <template v-if="!isStreaming && textContent">
+          <template v-for="(seg, idx) in contentSegments" :key="idx">
+            <div v-if="seg.type === 'text'" v-html="renderMarkdown(seg.content)" class="text-segment" />
+            <CodeCard v-else :code="seg.content" :language="seg.language" />
+          </template>
+        </template>
+
+        <!-- 流式输出：使用原有 computed 渲染 -->
+        <div v-else-if="isStreaming" class="streaming-wrap">
+          <StreamingText :content="textContent" :speed="20" />
+        </div>
+
+        <!-- 空内容占位 -->
+        <div v-else-if="!textContent && !isStreaming" class="empty-placeholder">
+          <span>暂无内容</span>
+        </div>
+      </div>
+
+      <!-- Video trigger for video_script type -->
+      <div v-if="role === 'assistant' && resolvedResourceType === 'video_script' && !isStreaming" class="video-trigger-row">
+        <el-button size="small" type="primary" plain @click="openInlineVideo" :loading="videoLoading" class="video-trigger-btn">
+          <el-icon :size="14"><VideoCamera /></el-icon>
+          <span>{{ videoLoading ? '生成视频中...' : '播放视频讲解' }}</span>
+        </el-button>
+      </div>
+
+      <!-- 内容生成预览（resource_ready 到达前显示摘要卡片） -->
+      <div v-if="resolvedResourceType && !resourceId && !isStreaming && role === 'assistant'" class="res-preview">
+        <div class="res-preview-header">
+          <el-icon :size="16"><component :is="resourceIcon" /></el-icon>
+          <span class="res-preview-type">{{ resourceTypeLabel(resolvedResourceType) }}</span>
+          <el-tag size="small" type="warning" effect="plain">生成中</el-tag>
+        </div>
+        <p class="res-preview-text">{{ contentPreviewText }}</p>
+        <div class="res-preview-progress">
+          <div class="res-preview-progress-bar" />
+        </div>
+      </div>
+
+      <!-- 内嵌资源播放器（不跳转页面） -->
+      <div v-if="showInlineSlide" class="inline-player-wrap">
+        <SlidePlayer v-if="slideContent" v-model:visible="showInlineSlide" :content="slideContent" :auto-play="true" />
+        <div v-else class="inline-player-loading">
+          <el-icon class="spin" :size="20"><Loading /></el-icon>
+          <span>加载资源中...</span>
+        </div>
+      </div>
+
+      <!-- 内嵌视频播放器 -->
+      <div v-if="showInlineVideo" class="inline-player-wrap">
+        <VideoPlayer 
+          :video-url="videoUrl" 
+          :title="resourceTitle || '视频讲解'"
+          @retry="openInlineVideo"
+        />
+        <div class="inline-player-close">
+          <el-button size="small" text @click="showInlineVideo = false">收起视频</el-button>
+        </div>
       </div>
 
       <!-- MindMap inline toggle -->
@@ -43,32 +103,61 @@
         </div>
       </div>
 
-      <!-- Resource preview card -->
-      <div v-if="resourceId && resourceTitle" class="res-card">
-        <div class="rc-left">
-          <div class="rc-icon" :class="resolvedResourceType || 'document'">
-            <el-icon :size="22"><component :is="resIcon(resolvedResourceType)" /></el-icon>
-          </div>
-          <div class="rc-info">
-            <span class="rc-type-tag">{{ resourceTypeLabel(resolvedResourceType) }}</span>
-            <span class="rc-title">{{ resourceTitle }}</span>
-          </div>
-        </div>
-        <el-button size="small" type="primary" @click="goToResource">查看详情</el-button>
+      <!-- Resource preview card (component) -->
+      <ResourceCard
+        v-if="resourceId && resourceTitle"
+        :resource-type="resolvedResourceType || 'document'"
+        :resource-title="resourceTitle"
+        :resource-id="resourceId"
+        :description="resourceDesc"
+        :show-slideshow="isSlideshowType"
+        @speak="toggleSpeak"
+        @slideshow="goToSlideshow"
+      />
+
+      <!-- 朗读（TTS 语音合成） -->
+      <div v-if="role === 'assistant' && !isStreaming && plainText" class="speak-row">
+        <button class="speak-btn" :disabled="ttsLoading" @click="toggleSpeak">
+          <el-icon :size="13"><component :is="ttsPlaying ? 'VideoPause' : 'Microphone'" /></el-icon>
+          <span>{{ ttsLoading ? '合成中…' : (ttsPlaying ? '停止' : '朗读') }}</span>
+        </button>
       </div>
     </div>
+
+    <!-- 图片灯箱 (Teleport 到 body 确保 z-index 正确) -->
+    <Teleport to="body">
+      <div v-if="lightboxImage" class="lightbox-overlay" @click.self="closeLightbox">
+        <button class="lightbox-close" @click="closeLightbox" aria-label="关闭">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+        <img :src="lightboxImage" class="lightbox-img" alt="预览图片" />
+      </div>
+    </Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, nextTick, onMounted } from 'vue'
+import { computed, ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Marked, Renderer } from 'marked'
 import DOMPurify from 'dompurify'
 import mermaid from 'mermaid'
 import MindMap from '@/components/resource/MindMap.vue'
+import SlidePlayer from '@/components/resource/SlidePlayer.vue'
+import VideoPlayer from '@/components/resource/VideoPlayer.vue'
+import CodeCard from '@/components/chat/CodeCard.vue'
+import ResourceCard from '@/components/chat/ResourceCard.vue'
+import StreamingText from '@/components/chat/StreamingText.vue'
+import { ElMessage } from 'element-plus'
+import { synthesizeSpeech } from '@/api/tts'
+import { getResource } from '@/api/resource'
+import api from '@/api'
+import { highlightCode, SVG_COPY, SVG_CHECK, safeBtoa, safeAtob } from '@/utils/highlight'
 
-// v3: Mermaid 初始化 (参考 Docusaurus/VuePress 集成模式)
+/* ── Mermaid 初始化 ── */
 mermaid.initialize({
   startOnLoad: false,
   theme: 'default',
@@ -81,18 +170,26 @@ mermaid.initialize({
 const props = defineProps<{
   role: string
   content: string
-  images?: string[]       // 多模态：用户消息中的图片 data URL 列表
+  images?: string[]
   agent?: string
   agentSwitch?: { from: string; to: string }
   isStreaming?: boolean
   resourceType?: string
   resourceId?: number
   resourceTitle?: string
+  collabAgents?: string[]
 }>()
 
 const router = useRouter()
 const bodyRef = ref<HTMLElement | null>(null)
 const showMindMap = ref(false)
+const showInlineSlide = ref(false)
+const showInlineVideo = ref(false)
+const videoUrl = ref('')
+const videoLoading = ref(false)
+const slideContent = ref("")
+
+/* ──── Agent / Resource 标签 ──── */
 
 const AGENT_LABELS: Record<string, string> = {
   supervisor: '学习助手',
@@ -119,17 +216,6 @@ function resourceTypeLabel(type?: string): string {
   return RESOURCE_TYPE_LABELS[type || ''] || '学习资源'
 }
 
-function resIcon(type?: string): string {
-  const map: Record<string, string> = {
-    document: 'Document',
-    mindmap: 'DataBoard',
-    question_set: 'EditPen',
-    video_script: 'VideoPlay',
-    code_example: 'Monitor',
-  }
-  return map[type || ''] || 'Document'
-}
-
 const resolvedResourceType = computed(() => {
   if (props.resourceType) return props.resourceType
   if (props.agent === 'resource_agent' && props.content) {
@@ -142,9 +228,33 @@ const resolvedResourceType = computed(() => {
   return undefined
 })
 
+/* ── 资源描述（截取前100字符用于 ResourceCard） ── */
+const resourceDesc = computed(() => {
+  if (!props.content) return undefined
+  const cleaned = props.content.replace(/```[\s\S]*?```/g, '').replace(/[#*_>`~|]/g, ' ').replace(/\s+/g, ' ').trim()
+  return cleaned.slice(0, 100)
+})
+
 const hasHeadings = computed(() => {
   const cleaned = props.content.replace(/```[\s\S]*?```/g, '')
   return /^#{1,3}\s/m.test(cleaned)
+})
+
+const resourceIcon = computed<string>(() => {
+  const icons: Record<string, string> = {
+    document: 'Document',
+    mindmap: 'DataBoard',
+    question_set: 'List',
+    video_script: 'VideoCamera',
+    code_example: 'Monitor',
+  }
+  return icons[resolvedResourceType.value || ''] || 'Document'
+})
+
+const contentPreviewText = computed(() => {
+  const t = props.content?.trim() || ''
+  if (!t) return '正在生成...'
+  return t.length > 80 ? t.slice(0, 80) + '...' : t
 })
 
 const showMindMapBtn = computed(() => {
@@ -157,190 +267,90 @@ function toggleMindMap() {
   showMindMap.value = !showMindMap.value
 }
 
-// 多模态：图片预览（点击放大）
-function previewImage(src: string) {
-  window.open(src, '_blank')
+/* ──── 图片灯箱 ──── */
+const lightboxImage = ref<string | null>(null)
+
+function openLightbox(src: string) {
+  lightboxImage.value = src
 }
 
-// v3: Mermaid diagram rendering
-async function renderMermaidDiagrams() {
-  await import('vue').then(m => m.nextTick())
-  const el = bodyRef.value
-  if (!el) return
-  // Find both <pre class="mermaid"> and <code class="language-mermaid"> patterns
-  let mermaidEls = el.querySelectorAll<HTMLElement>('.mermaid:not(.mermaid-rendered)')
-  if (mermaidEls.length === 0) {
-    // Fallback: look for code blocks rendered by marked as language-mermaid
-    const codeBlocks = el.querySelectorAll<HTMLElement>('.language-mermaid')
-    codeBlocks.forEach(cb => { cb.classList.add('mermaid') })
-    mermaidEls = el.querySelectorAll<HTMLElement>('.mermaid:not(.mermaid-rendered)')
-  }
-  for (const me of Array.from(mermaidEls)) {
-    try {
-      const code = me.textContent || ''
-      if (!code.trim()) continue
-      const id = 'mermaid-' + Math.random().toString(36).slice(2, 8)
-      const { svg } = await mermaid.render(id, code)
-      // XSS防护：对Mermaid渲染的SVG进行sanitize
-      me.innerHTML = DOMPurify.sanitize(svg, {
-        USE_PROFILES: { svg: true, svgFilters: true },
-        ADD_ATTR: ['viewBox', 'fill', 'stroke', 'stroke-width', 'd', 'width', 'height'],
-      })
-      me.classList.add('mermaid-rendered')
-    } catch (_) { me.classList.add('mermaid-error') }
-  }
+function closeLightbox() {
+  lightboxImage.value = null
 }
-watch(() => props.isStreaming, (s) => { if (!s) setTimeout(renderMermaidDiagrams, 100) })
-watch(() => props.content, () => { if (!props.isStreaming) setTimeout(renderMermaidDiagrams, 100) })
-onMounted(() => { if (!props.isStreaming && props.content) setTimeout(renderMermaidDiagrams, 200) })
 
-function goToResource() {
+/* ──── 仅文档和视频脚本资源支持视频讲解 ──── */
+const isSlideshowType = computed(() => {
+  const t = resolvedResourceType.value
+  return t === 'document' || t === 'video_script'
+})
+
+function goToSlideshow() {
   if (props.resourceId) {
-    router.push(`/resources/${props.resourceId}`)
+    router.push(`/resources/${props.resourceId}?mode=slideshow`)
   }
 }
 
-/* ── Syntax highlighting (with LRU cache) ── */
-const _hlCache = new Map<string, string>()
-const HL_CACHE_MAX = 100 // 最大缓存条目数
+/* ══════════════════════════════════════════════
+   内容段解析 — 分离文本和代码块
+   ══════════════════════════════════════════════ */
 
-function highlightCode(code: string, lang?: string): string {
-  // 缓存键：代码前200字符 + 语言（避免大字符串作为key）
-  const cacheKey = `${lang || 'text'}:${code.slice(0, 200)}`
-  if (_hlCache.has(cacheKey)) return _hlCache.get(cacheKey)!
-
-  // 先移除LLM可能错误输出的HTML标签（如 <span class="sk">），防止显示原始标签文本
-  let cleaned = code
-    .replace(/<span\b[^>]*>/gi, '')
-    .replace(/<\/span>/gi, '')
-    .replace(/<div\b[^>]*>/gi, '')
-    .replace(/<\/div>/gi, '')
-
-  let escaped = cleaned
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-
-  if (!lang || lang === 'text' || lang === 'plaintext' || lang === 'plain') return escaped
-
-  if (lang === 'python' || lang === 'py') {
-    const kw = 'False|None|True|and|as|assert|async|await|break|class|continue|def|del|elif|else|except|finally|for|from|global|if|import|in|is|lambda|nonlocal|not|or|pass|raise|return|try|while|with|yield'
-    escaped = escaped.replace(new RegExp(`\\b(${kw})\\b`, 'g'), '<span class="sk">$1</span>')
-    escaped = escaped.replace(/(@\w+)/g, '<span class="sd">$1</span>')
-    escaped = escaped.replace(/\b([a-zA-Z_]\w*)(\s*\()/g, '<span class="sf">$1</span>$2')
-    escaped = escaped.replace(/(#.*)$/gm, '<span class="sc">$1</span>')
-    escaped = escaped.replace(/("""[\s\S]*?""")/g, '<span class="ss">$1</span>')
-    escaped = escaped.replace(/("(?:[^"\\]|\\.)*")/g, '<span class="ss">$1</span>')
-    escaped = escaped.replace(/('''[\s\S]*?''')/g, '<span class="ss">$1</span>')
-    escaped = escaped.replace(/('(?:[^'\\]|\\.)*')/g, '<span class="ss">$1</span>')
-    escaped = escaped.replace(/\b(\d+\.?\d*)\b/g, '<span class="sn">$1</span>')
-  } else if (lang === 'javascript' || lang === 'js' || lang === 'typescript' || lang === 'ts') {
-    const kw = 'break|case|catch|class|const|continue|debugger|default|delete|do|else|export|extends|finally|for|function|if|import|in|instanceof|let|new|return|super|switch|this|throw|try|typeof|var|void|while|with|yield|async|await|from|of|static|enum|interface|type|implements'
-    escaped = escaped.replace(new RegExp(`\\b(${kw})\\b`, 'g'), '<span class="sk">$1</span>')
-    escaped = escaped.replace(/(\/\/.*)$/gm, '<span class="sc">$1</span>')
-    escaped = escaped.replace(/("(?:[^"\\]|\\.)*")/g, '<span class="ss">$1</span>')
-    escaped = escaped.replace(/('(?:[^'\\]|\\.)*')/g, '<span class="ss">$1</span>')
-    escaped = escaped.replace(/(`(?:[^`\\]|\\.)*`)/g, '<span class="ss">$1</span>')
-    escaped = escaped.replace(/\b(\d+\.?\d*)\b/g, '<span class="sn">$1</span>')
-  } else if (lang === 'bash' || lang === 'sh' || lang === 'shell') {
-    escaped = escaped.replace(/(#.*)$/gm, '<span class="sc">$1</span>')
-    escaped = escaped.replace(/("(?:[^"\\]|\\.)*")/g, '<span class="ss">$1</span>')
-    escaped = escaped.replace(/('(?:[^'\\]|\\.)*')/g, '<span class="ss">$1</span>')
-    const cmds = 'echo|cd|ls|cp|mv|rm|mkdir|git|npm|pip|python|node|docker|curl|wget|export|source|chmod|cat|grep|find|sed|awk|tar|ssh|scp|sudo|apt|brew|yarn|pnpm|npx|uvicorn|docker-compose|ps|kill'
-    escaped = escaped.replace(new RegExp(`\\b(${cmds})\\b`, 'g'), '<span class="sk">$1</span>')
-  } else if (lang === 'sql') {
-    const kw = 'SELECT|FROM|WHERE|INSERT|INTO|VALUES|UPDATE|SET|DELETE|CREATE|TABLE|ALTER|DROP|INDEX|JOIN|INNER|LEFT|RIGHT|OUTER|ON|AS|AND|OR|NOT|NULL|IS|LIKE|BETWEEN|IN|ORDER|BY|GROUP|HAVING|LIMIT|OFFSET|COUNT|SUM|AVG|MAX|MIN|DISTINCT|PRIMARY|KEY|FOREIGN|REFERENCES|INT|VARCHAR|TEXT|BOOLEAN|DATETIME|JSON'
-    escaped = escaped.replace(new RegExp(`\\b(${kw})\\b`, 'gi'), '<span class="sk">$1</span>')
-    escaped = escaped.replace(/('(?:[^'\\]|\\.)*')/g, '<span class="ss">$1</span>')
-    escaped = escaped.replace(/\b(\d+\.?\d*)\b/g, '<span class="sn">$1</span>')
-  } else if (lang === 'json') {
-    escaped = escaped.replace(/("(?:[^"\\]|\\.)*")(\s*:)/g, '<span class="sk">$1</span>$2')
-    escaped = escaped.replace(/:\s*("(?:[^"\\]|\\.)*")/g, ': <span class="ss">$1</span>')
-    escaped = escaped.replace(/\b(true|false|null)\b/g, '<span class="sk">$1</span>')
-    escaped = escaped.replace(/\b(\d+\.?\d*)\b/g, '<span class="sn">$1</span>')
-  } else if (lang === 'html' || lang === 'xml' || lang === 'svg') {
-    escaped = escaped.replace(/(&lt;\/?)([\w-]+)/g, '$1<span class="sk">$2</span>')
-    escaped = escaped.replace(/\s([\w-]+)(=)/g, ' <span class="sf">$1</span>$2')
-    escaped = escaped.replace(/("(?:[^"\\]|\\.)*")/g, '<span class="ss">$1</span>')
-    escaped = escaped.replace(/(&lt;!--[\s\S]*?--&gt;)/g, '<span class="sc">$1</span>')
-  } else if (lang === 'css' || lang === 'scss') {
-    escaped = escaped.replace(/(\/\*[\s\S]*?\*\/)/g, '<span class="sc">$1</span>')
-    escaped = escaped.replace(/([.#@][\w-]+)/g, '<span class="sk">$1</span>')
-    escaped = escaped.replace(/:([\w-]+)/g, ':<span class="sf">$1</span>')
-    escaped = escaped.replace(/("(?:[^"\\]|\\.)*")/g, '<span class="ss">$1</span>')
-    escaped = escaped.replace(/\b(\d+\.?\d*(?:px|em|rem|%|vh|vw|s|ms)?)\b/g, '<span class="sn">$1</span>')
-  } else if (lang === 'yaml' || lang === 'yml') {
-    escaped = escaped.replace(/(#.*)$/gm, '<span class="sc">$1</span>')
-    escaped = escaped.replace(/^(\s*)([\w-]+)(:)/gm, '$1<span class="sk">$2</span>$3')
-    escaped = escaped.replace(/("(?:[^"\\]|\\.)*")/g, '<span class="ss">$1</span>')
-  } else if (lang === 'cpp' || lang === 'c++' || lang === 'c') {
-    const kw = 'int|float|double|char|void|bool|class|struct|namespace|using|template|typename|virtual|override|public|private|protected|const|static|auto|return|if|else|for|while|do|switch|case|break|continue|new|delete|nullptr|true|false|include|define|typedef|sizeof|try|catch|throw|std|cout|cin|endl|vector|string|map|set|pair|unique_ptr|shared_ptr|constexpr|noexcept|enum|explicit|friend|inline|long|short|signed|unsigned|union|volatile|wchar_t'
-    escaped = escaped.replace(new RegExp(`\\b(${kw})\\b`, 'g'), '<span class="sk">$1</span>')
-    escaped = escaped.replace(/(#.*)$/gm, '<span class="sc">$1</span>')
-    escaped = escaped.replace(/(\/\/.*)$/gm, '<span class="sc">$1</span>')
-    escaped = escaped.replace(/("(?:[^"\\]|\\.)*")/g, '<span class="ss">$1</span>')
-    escaped = escaped.replace(/\b([a-zA-Z_]\w*)(\s*\()/g, '<span class="sf">$1</span>$2')
-    escaped = escaped.replace(/\b(\d+\.?\d*)\b/g, '<span class="sn">$1</span>')
-  } else if (lang === 'java') {
-    const kw = 'public|private|protected|class|interface|extends|implements|static|final|void|int|long|double|float|boolean|char|String|return|if|else|for|while|do|switch|case|break|continue|new|this|super|try|catch|throw|throws|import|package|null|true|false|abstract|synchronized|volatile|transient|enum|instanceof|native|strictfp|assert|default'
-    escaped = escaped.replace(new RegExp(`\\b(${kw})\\b`, 'g'), '<span class="sk">$1</span>')
-    escaped = escaped.replace(/(\/\/.*)$/gm, '<span class="sc">$1</span>')
-    escaped = escaped.replace(/("(?:[^"\\]|\\.)*")/g, '<span class="ss">$1</span>')
-    escaped = escaped.replace(/('(?:[^'\\]|\\.)*')/g, '<span class="ss">$1</span>')
-    escaped = escaped.replace(/\b([a-zA-Z_]\w*)(\s*\()/g, '<span class="sf">$1</span>$2')
-    escaped = escaped.replace(/\b(\d+\.?\d*)\b/g, '<span class="sn">$1</span>')
-  } else if (lang === 'go' || lang === 'golang') {
-    const kw = 'func|var|const|type|struct|interface|map|chan|defer|go|return|if|else|for|range|switch|case|break|continue|fallthrough|import|package|nil|true|false|make|new|append|len|cap|select|goto|int|int8|int16|int32|int64|uint|uint8|uint16|uint32|uint64|float32|float64|string|bool|byte|rune|error'
-    escaped = escaped.replace(new RegExp(`\\b(${kw})\\b`, 'g'), '<span class="sk">$1</span>')
-    escaped = escaped.replace(/(\/\/.*)$/gm, '<span class="sc">$1</span>')
-    escaped = escaped.replace(/("(?:[^"\\]|\\.)*")/g, '<span class="ss">$1</span>')
-    escaped = escaped.replace(/(`(?:[^`\\]|\\.)*`)/g, '<span class="ss">$1</span>')
-    escaped = escaped.replace(/\b([a-zA-Z_]\w*)(\s*\()/g, '<span class="sf">$1</span>$2')
-    escaped = escaped.replace(/\b(\d+\.?\d*)\b/g, '<span class="sn">$1</span>')
-  } else if (lang === 'rust' || lang === 'rs') {
-    const kw = 'fn|let|mut|struct|impl|trait|enum|match|use|mod|pub|self|super|where|as|ref|loop|while|for|if|else|return|break|continue|in|move|async|await|Some|None|Ok|Err|Result|Option|Vec|String|const|static|type|dyn|unsafe|extern|crate|macro_rules|true|false|box|drop'
-    escaped = escaped.replace(new RegExp(`\\b(${kw})\\b`, 'g'), '<span class="sk">$1</span>')
-    escaped = escaped.replace(/(\/\/.*)$/gm, '<span class="sc">$1</span>')
-    escaped = escaped.replace(/(\/\*[\s\S]*?\*\/)/g, '<span class="sc">$1</span>')
-    escaped = escaped.replace(/("(?:[^"\\]|\\.)*")/g, '<span class="ss">$1</span>')
-    escaped = escaped.replace(/\b([a-zA-Z_]\w*)(\s*\()/g, '<span class="sf">$1</span>$2')
-    escaped = escaped.replace(/('(?:[^'\\]|\\.)*')/g, '<span class="ss">$1</span>')
-    escaped = escaped.replace(/\b(\d+\.?\d*(?:u8|u16|u32|u64|i8|i16|i32|i64|f32|f64|usize|isize)?)\b/g, '<span class="sn">$1</span>')
-  }
-
-  // 写入缓存，LRU淘汰
-  if (_hlCache.size >= HL_CACHE_MAX) {
-    const firstKey = _hlCache.keys().next().value
-    if (firstKey) _hlCache.delete(firstKey)
-  }
-  _hlCache.set(cacheKey, escaped)
-
-  return escaped
+interface ContentSegment {
+  type: 'text' | 'code'
+  content: string
+  language?: string
 }
 
-const SVG_COPY = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>'
-const SVG_CHECK = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>'
+const textContent = computed(() => (props.content || '').trim())
 
-function safeBtoa(str: string): string {
-  const bytes = new TextEncoder().encode(str)
-  let binary = ''
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i])
-  }
-  return btoa(binary)
-}
+const contentSegments = computed<ContentSegment[]>(() => {
+  const raw = props.content || ''
+  if (!raw.trim()) return []
 
-function safeAtob(encoded: string): string {
-  const binary = atob(encoded)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i)
+  const segments: ContentSegment[] = []
+  const regex = /```(\w*)\n([\s\S]*?)```/g
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+
+  while ((match = regex.exec(raw)) !== null) {
+    const lang = match[1] || ''
+    // mermaid 块保留在文本段中，由 Mermaid 渲染器处理
+    if (lang === 'mermaid') continue
+
+    // 文本段（代码块之前的内容）
+    if (match.index > lastIndex) {
+      const txt = raw.slice(lastIndex, match.index).trim()
+      if (txt) {
+        segments.push({ type: 'text', content: txt })
+      }
+    }
+    // 代码段
+    segments.push({
+      type: 'code',
+      content: match[2].trimEnd(),
+      language: lang || undefined,
+    })
+    lastIndex = match.index + match[0].length
   }
-  return new TextDecoder().decode(bytes)
-}
+
+  // 最后一段文本
+  if (lastIndex < raw.length) {
+    const txt = raw.slice(lastIndex).trim()
+    if (txt) {
+      segments.push({ type: 'text', content: txt })
+    }
+  }
+
+  // 全部是文本（无代码块）
+  if (segments.length === 0 && raw.trim()) {
+    segments.push({ type: 'text', content: raw.trim() })
+  }
+
+  return segments
+})
+
+/* ── 文本段的 Markdown 渲染器 ── */
 
 const renderer = new Renderer()
-
 renderer.code = function (token: { text: string; lang?: string; escaped?: boolean }): string {
   const lang = token.lang || 'text'
   const escapedToken = token.escaped !== false
@@ -366,42 +376,169 @@ renderer.code = function (token: { text: string; lang?: string; escaped?: boolea
   )
 }
 
-// Use a local marked instance to avoid mutating the global default
-const localMarked = new Marked()
-localMarked.use({ renderer })
+const textMarked = new Marked()
+textMarked.use({ renderer })
+
+function renderMarkdown(md: string): string {
+  try {
+    let content = md
+    // mermaid 预处理
+    content = content.replace(/```mermaid\n([\s\S]*?)```/g, (_: string, code: string) => {
+      return '<pre class="mermaid">' + code.trim() + '</pre>'
+    })
+    const raw = textMarked.parse(content) as string
+    return DOMPurify.sanitize(raw, {
+      ALLOWED_ATTR: ['class', 'href', 'target', 'data-code', 'viewBox', 'fill', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin', 'd', 'width', 'height', 'rx', 'ry', 'cx', 'cy', 'r', 'x1', 'y1', 'x2', 'y2', 'points', 'transform', 'opacity', 'style', 'xmlns', 'text-anchor', 'dominant-baseline', 'font-size', 'font-family', 'font-weight', 'marker-end', 'alt', 'src'],
+      ALLOWED_TAGS: ['a', 'b', 'i', 'em', 'strong', 'p', 'br', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pre', 'code', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'hr', 'img', 'span', 'div', 'button', 'svg', 'path', 'rect', 'line', 'circle', 'ellipse', 'text', 'tspan', 'polyline', 'polygon', 'g', 'marker', 'linearGradient', 'stop', 'defs', 'filter', 'feDropShadow'],
+      ADD_ATTR: ['target'],
+    })
+  } catch {
+    return md
+  }
+}
+
+/* ── 流式模式的 rendered（保持原有行为） ── */
 
 const rendered = computed(() => {
-  // 流式输出中且内容为空 → 显示优雅加载态，而非"..."
   if (!props.content && props.isStreaming) {
     return '<div class="streaming-loader"><span></span><span></span><span></span></div>'
   }
-  // 流式输出中：跳过marked解析（每chunk都parse严重卡顿），直接HTML转义逐字渲染
-  // 同时移除可能被LLM错误输出的HTML标签（如 <span class="sk">），防止显示原始标签文本
   if (props.isStreaming && props.content) {
     const cleaned = (props.content || '')
       .replace(/<span\b[^>]*>/gi, '')
       .replace(/<\/span>/gi, '')
       .replace(/<div\b[^>]*>/gi, '')
       .replace(/<\/div>/gi, '')
+      .replace(/&lt;span\b[^&]*&gt;/gi, '')
+      .replace(/&lt;\/span&gt;/gi, '')
+      .replace(/"(?:sk|ss|sc|sn|sf|sd|hl|k|n|s|f|d|c|o|p|w|kc|kp)">/gi, '')
+      .replace(/\s*class\s*=\s*"(?:sk|ss|sc|sn|sf|sd)[^"]*"/gi, '')
     return '<p>' + cleaned.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>') + '</p>'
   }
-  try {
-    // v3: mermaid 预处理
-    let mdContent = props.content || ''
-    mdContent = mdContent.replace(/```mermaid\n([\s\S]*?)```/g, (_: string, code: string) => {
-      return '<pre class="mermaid">' + code.trim() + '</pre>'
-    })
-    const raw = localMarked.parse(mdContent) as string
-    // XSS 防护：过滤不安全的 HTML 标签和属性
-    return DOMPurify.sanitize(raw, {
-      ALLOWED_ATTR: ['class', 'href', 'target', 'data-code', 'viewBox', 'fill', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin', 'd', 'width', 'height', 'rx', 'ry', 'cx', 'cy', 'r', 'x1', 'y1', 'x2', 'y2', 'points', 'transform', 'opacity', 'style', 'xmlns', 'text-anchor', 'dominant-baseline', 'font-size', 'font-family', 'font-weight', 'marker-end'],
-      ALLOWED_TAGS: ['a', 'b', 'i', 'em', 'strong', 'p', 'br', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pre', 'code', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'hr', 'img', 'span', 'div', 'button', 'svg', 'path', 'rect', 'line', 'circle', 'ellipse', 'text', 'tspan', 'polyline', 'polygon', 'g', 'marker', 'linearGradient', 'stop', 'defs', 'filter', 'feDropShadow'],
-      ADD_ATTR: ['target'],
-    })
-  } catch {
-    return props.content || ''
-  }
+  // 非流式模式由 segment 渲染接管
+  return ''
 })
+
+/* ──── Mermaid 图渲染 ──── */
+
+async function renderMermaidDiagrams() {
+  await import('vue').then(m => m.nextTick())
+  const el = bodyRef.value
+  if (!el) return
+  let mermaidEls = el.querySelectorAll<HTMLElement>('.mermaid:not(.mermaid-rendered)')
+  if (mermaidEls.length === 0) {
+    const codeBlocks = el.querySelectorAll<HTMLElement>('.language-mermaid')
+    codeBlocks.forEach(cb => { cb.classList.add('mermaid') })
+    mermaidEls = el.querySelectorAll<HTMLElement>('.mermaid:not(.mermaid-rendered)')
+  }
+  for (const me of Array.from(mermaidEls)) {
+    try {
+      const code = me.textContent || ''
+      if (!code.trim()) continue
+      const id = 'mermaid-' + Math.random().toString(36).slice(2, 8)
+      const { svg } = await mermaid.render(id, code)
+      me.innerHTML = DOMPurify.sanitize(svg, {
+        USE_PROFILES: { svg: true, svgFilters: true },
+        ADD_ATTR: ['viewBox', 'fill', 'stroke', 'stroke-width', 'd', 'width', 'height'],
+      })
+      me.classList.add('mermaid-rendered')
+    } catch (_) { me.classList.add('mermaid-error') }
+  }
+}
+watch(() => props.isStreaming, (s) => { if (!s) setTimeout(renderMermaidDiagrams, 100) })
+watch(() => props.content, () => { if (!props.isStreaming) setTimeout(renderMermaidDiagrams, 100) })
+onMounted(() => { if (!props.isStreaming && props.content) setTimeout(renderMermaidDiagrams, 200) })
+
+/* ──── TTS 朗读 ──── */
+
+const ttsLoading = ref(false)
+const ttsPlaying = ref(false)
+let ttsAudio: HTMLAudioElement | null = null
+let ttsBlobUrl: string | null = null
+
+const plainText = computed(() =>
+  (props.content || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/[#*_>`~|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim(),
+)
+
+function stopTts() {
+  if (ttsAudio) {
+    ttsAudio.pause()
+    ttsAudio.currentTime = 0
+  }
+  function goToSlideshow() {
+    if (props.resourceId) {
+      showInlineSlide.value = true
+      getResource(props.resourceId).then(function(r) {
+        slideContent.value = r.content || ''
+      }).catch(function() {
+        ElMessage.error('加载资源失败')
+        showInlineSlide.value = false
+      })
+    }
+  }
+
+  ttsPlaying.value = false
+}
+
+function openVideoResource() {
+    goToSlideshow()
+  }
+async function openInlineVideo() {
+  if (videoUrl.value) {
+    showInlineVideo.value = true
+    return
+  }
+  videoLoading.value = true
+  try {
+    const resp = await api.post('/video/generate', {
+      script_text: props.content || '',
+      title: props.resourceTitle || '视频讲解'
+    })
+    if (resp.data?.url) {
+      videoUrl.value = resp.data.url
+      showInlineVideo.value = true
+    } else {
+      goToSlideshow()
+    }
+  } catch {
+    goToSlideshow()
+  } finally {
+    videoLoading.value = false
+  }
+}
+
+
+
+  async function toggleSpeak() {
+  if (ttsPlaying.value) { stopTts(); return }
+  if (!plainText.value) return
+  ttsLoading.value = true
+  try {
+    const url = await synthesizeSpeech(plainText.value)
+    if (ttsBlobUrl) URL.revokeObjectURL(ttsBlobUrl)
+    ttsBlobUrl = url
+    ttsAudio = new Audio(url)
+    ttsAudio.onended = () => { ttsPlaying.value = false }
+    ttsAudio.onerror = () => { ttsPlaying.value = false }
+    await ttsAudio.play()
+    ttsPlaying.value = true
+  } catch (e) {
+    ElMessage.warning('语音合成暂不可用')
+  } finally {
+    ttsLoading.value = false
+  }
+}
+
+onUnmounted(() => {
+  stopTts()
+  if (ttsBlobUrl) URL.revokeObjectURL(ttsBlobUrl)
+})
+
+/* ──── 气泡点击委托（处理遗留 .cb-copy 复制按钮）──── */
 
 function onBubbleClick(e: MouseEvent) {
   const target = e.target as HTMLElement
@@ -520,6 +657,19 @@ function onBubbleClick(e: MouseEvent) {
 }
 .user .cursor { color: rgba(255,255,255,.8); }
 
+/* ═══════════ Empty placeholder ═══════════ */
+.empty-placeholder {
+  padding: 8px 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-style: italic;
+}
+
+/* ═══════════ Text segment ═══════════ */
+.text-segment {
+  color: var(--text-primary);
+}
+
 /* ═══════════ Streaming Loader — 三点跳动加载态 ═══════════ */
 .body :deep(.streaming-loader) {
   display: flex;
@@ -597,22 +747,28 @@ function onBubbleClick(e: MouseEvent) {
 .msg-images {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 8px;
+  gap: 8px;
+  margin-bottom: 10px;
 }
 .msg-img {
-  max-width: 240px;
-  max-height: 200px;
-  border-radius: 8px;
+  border-radius: 10px;
   cursor: pointer;
-  object-fit: contain;
+  object-fit: cover;
   border: 1px solid rgba(0,0,0,.08);
-  transition: transform 0.15s, box-shadow 0.15s;
+  transition: transform 0.2s var(--ease-bounce), box-shadow 0.2s var(--ease-standard);
 }
-.msg-img:hover {
-  transform: scale(1.03);
-  box-shadow: 0 4px 12px rgba(0,0,0,.12);
+
+/* ── 方案A: CSS 增强 image-card ── */
+.image-card {
+  max-width: 320px;
+  max-height: 300px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.06);
 }
+.image-card:hover {
+  transform: scale(1.04);
+  box-shadow: 0 6px 20px rgba(0,0,0,.14);
+}
+
 .body :deep(p) {
   margin: 0 0 6px;
   color: var(--text-secondary);
@@ -645,7 +801,7 @@ function onBubbleClick(e: MouseEvent) {
 .body :deep(table) { border-collapse: collapse; margin: 6px 0; width: 100%; }
 .body :deep(th), .body :deep(td) { border: 1px solid var(--border); padding: 6px 10px; text-align: left; font-size: 13px; }
 .body :deep(th) { background: var(--bg-input); font-weight: 600; color: var(--text-secondary); }
-.body :deep(code:not(.cb-pre code)) {
+.body :deep(code:not(.cb-pre code):not(.cc-code)) {
   background: var(--bg-input);
   color: var(--text-primary);
   padding: 2px 6px;
@@ -653,12 +809,12 @@ function onBubbleClick(e: MouseEvent) {
   font-size: 13px;
   font-family: 'Menlo', 'Consolas', 'Courier New', monospace;
 }
-.user .body :deep(code:not(.cb-pre code)) {
+.user .body :deep(code:not(.cb-pre code):not(.cc-code)) {
   background: rgba(255,255,255,0.2);
   color: #fff;
 }
 
-/* ═══════════ Code Block ═══════════ */
+/* ═══════════ Legacy Code Block (.cb) — 降级渲染 ═══════════ */
 :deep(.cb) {
   margin: 10px 0;
   border-radius: var(--radius-md);
@@ -722,6 +878,7 @@ function onBubbleClick(e: MouseEvent) {
   white-space: pre;
 }
 
+/* Syntax highlight colors (legacy + shared) */
 :deep(.sk) { color: #C084FC; font-weight: 500; }
 :deep(.ss) { color: #6EE7B7; }
 :deep(.sc) { color: #64748B; font-style: italic; }
@@ -738,35 +895,107 @@ function onBubbleClick(e: MouseEvent) {
 .inline-mindmap-wrap { margin-top: 8px; }
 .user .mindmap-section { border-color: rgba(255,255,255,0.15); }
 
-/* ═══════════ Resource Card ═══════════ */
-.res-card {
-  margin-top: 12px;
-  border-top: 1px solid var(--border);
-  padding-top: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-.user .res-card { border-color: rgba(255,255,255,0.15); }
-.rc-left { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
-.rc-icon {
-  width: 38px; height: 38px;
+/* ═══════════ 朗读按钮 (TTS) ═══════════ */
+
+/* 视频触发器按钮行 */
+
+
+/* 内容生成预览卡片 */
+.res-preview {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; margin: 6px 0;
+  background: var(--bg-page); border: 1px dashed var(--border);
   border-radius: var(--radius-md);
+  animation: fade-in 0.3s ease;
+}
+.res-preview .res-spin { color: var(--primary); animation: spin 1s linear infinite; }
+.res-preview-info { flex: 1; min-width: 0; }
+.res-preview-type { font-size: 11px; color: var(--text-muted); }
+.res-preview-title { font-size: 12px; color: var(--text-primary); font-weight: 500; }
+/* 内嵌播放器容器 */
+.inline-player-wrap { margin: 8px 0; border-radius: var(--radius-lg); overflow: hidden; }
+.inline-player-loading {
+  display: flex; align-items: center; gap: 10px; padding: 24px;
+  justify-content: center; color: var(--text-muted); font-size: 13px;
+}
+
+.video-trigger-row {
+  margin-top: 8px;
+}
+.video-trigger-btn {
+  width: 100%;
+}
+
+.speak-row { margin-top: 8px; }
+.speak-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.speak-btn:hover:not(:disabled) { color: var(--primary); border-color: var(--primary); }
+.speak-btn:disabled { opacity: 0.6; cursor: default; }
+
+/* ═══════════ 图片灯箱 (Lightbox) ═══════════ */
+.lightbox-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: rgba(0, 0, 0, 0.82);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
-  border: 1px solid;
+  animation: fadeIn 0.25s var(--ease-standard) both;
 }
-.rc-icon.document { background: rgba(59,130,246,.1); color: var(--primary); border-color: rgba(59,130,246,.2); }
-.rc-icon.mindmap { background: rgba(16,185,129,.10); color: #10B981; border-color: rgba(16,185,129,.2); }
-.rc-icon.code_example { background: rgba(139,92,246,.10); color: #8B5CF6; border-color: rgba(139,92,246,.2); }
-.rc-icon.question_set { background: rgba(245,158,11,.10); color: #F59E0B; border-color: rgba(245,158,11,.2); }
-.rc-icon.video_script { background: rgba(59,130,246,.10); color: #3B82F6; border-color: rgba(59,130,246,.2); }
-.rc-info { display: flex; flex-direction: column; min-width: 0; }
-.rc-type-tag { font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px; }
-.rc-title { font-size: 13px; font-weight: 500; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.user .rc-title { color: #fff; }
-.user .rc-type-tag { color: rgba(255,255,255,.65); }
+.lightbox-close {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  width: 44px;
+  height: 44px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+  z-index: 10001;
+}
+.lightbox-close:hover {
+  background: rgba(255, 255, 255, 0.22);
+  transform: scale(1.08);
+}
+.lightbox-img {
+  max-width: 90vw;
+  max-height: 90dvh;
+  object-fit: contain;
+  border-radius: var(--radius-lg);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+  animation: scaleIn 0.3s var(--ease-emphasis) both;
+}
+
+.collab-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #8B5CF6;
+  background: rgba(139,92,246,.08);
+  padding: 1px 7px;
+  border-radius: 8px;
+  margin-left: 6px;
+}
 </style>

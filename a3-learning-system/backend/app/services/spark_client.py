@@ -38,18 +38,11 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 logger = logging.getLogger(__name__)
 
 # v3: 可重试异常类型 — 网络/超时可重试, 认证/参数错误不可重试
+# Reserved for future custom retry logic (SparkRateLimitError, SparkNetworkError, SparkAuthError)
 class SparkAPIError(Exception): pass
 class SparkAuthError(SparkAPIError): pass
 class SparkRateLimitError(SparkAPIError): pass
 class SparkNetworkError(SparkAPIError): pass
-
-def _is_retryable(exc: Exception) -> bool:
-    """判断异常是否可重试"""
-    if isinstance(exc, (SparkRateLimitError, SparkNetworkError)): return True
-    if isinstance(exc, requests.Timeout): return True
-    if isinstance(exc, requests.ConnectionError): return True
-    if isinstance(exc, SparkAuthError): return False
-    return False  # 默认不重试
 
 API_RETRY = retry(
     stop=stop_after_attempt(3),

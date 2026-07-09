@@ -34,6 +34,19 @@ export interface SSEChunk {
   // 智能建议字段（type=suggestion 时）
   intent?: string      // evaluation / resource / question / path
   reason?: string      // 建议原因描述
+  // 多Agent协同事件字段（type=collaboration 时）
+  mode?: string        // "qa_parallel" | "resource_parallel" | "path_parallel"
+  // 学习路径更新事件字段（type=path_update 时）
+  action?: string      // "replanned"
+  new_unlocked?: string[]  // 新解锁的知识点
+  skipped?: string[]       // 因已掌握而跳过的知识点
+  current_node?: string    // 当前推荐节点
+  current_index?: number   // 当前节点序号
+  total_nodes?: number     // 路径总节点数
+  // 复习提醒事件字段（type=review_due 时）— P1-24
+  total?: number           // 到期复习知识点总数
+  high_risk?: number       // 高风险数量
+  items?: Array<{ concept: string; retention: number; risk: string; next_review: string | null; review_count: number; interval_days: number }>
 }
 
 /*

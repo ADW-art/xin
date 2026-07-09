@@ -1,0 +1,394 @@
+<html xmlns="http://www.w3.org/1999/xhtml"><head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<meta content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no" name="viewport">
+<meta content="yes" name="apple-mobile-web-app-capable">
+<meta content="black" name="apple-mobile-web-app-status-bar-style">
+<meta content="telephTwo=no" name="format-detection">
+<meta name = "format-detection" content = "telephone=no">
+<meta content="email=no" name="format-detection">
+<meta name="keywords" content="中国软件杯,软件杯,软件杯大赛" />
+<meta name="description" content="“中国软件杯”大学生软件设计大赛是由工业和信息化部、教育部和江苏省人民政府共同创办的面向中国高校在校学生（含高职）的纯公益性软件设计大赛。历届赛事得到社会各界高度认可，已成为全国软件行业规格最高、最具影响力，促进大学生软件人才培养的国家级品牌赛事，是全国软件产业创新的“风向标”。" />
+<script type="text/javascript" src="https://www.cnsoftbei.com/statics/js/js/terminator2.2.min.js" async="true"></script>
+<script type="text/javascript" src="https://www.cnsoftbei.com/statics/js/js/jquery-1.8.3.min.js"></script>
+<script type="text/javascript" src="https://www.cnsoftbei.com/statics/js/js/koala.min.1.5.js"></script>
+<title>B1-基于大模型技术的软件实训教学结果检查评价与报表系统 - 信息技术应用创新 - 软件杯大赛官网</title>
+<link href="https://www.cnsoftbei.com/statics/css/css/layout.css" rel="stylesheet" type="text/css">
+<link href="https://www.cnsoftbei.com/statics/css/css/reset.css" rel="stylesheet" type="text/css">
+<link href="https://www.cnsoftbei.com/statics/css/css/css.css" rel="stylesheet" type="text/css">
+<link rel="stylesheet" href="https://www.cnsoftbei.com/statics/css/css/mobile.css">
+<link rel="stylesheet" href="https://www.cnsoftbei.com/statics/css/css/media.css">
+<!-------移动端样式------->
+<link rel="stylesheet" href="https://www.cnsoftbei.com/statics/css/css/style.css">
+<script type="text/javascript" src="https://www.cnsoftbei.com/statics/js/js/jquery.js"></script>
+<script type="text/javascript" src="https://www.cnsoftbei.com/statics/js/js/script.js"></script>
+<script>
+var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?5214bd85866cfea8dfbf6d7686eeaab9";
+  var s = document.getElementsByTagName("script")[0]; 
+  s.parentNode.insertBefore(hm, s);
+})();
+</script>
+</head>
+
+<body>
+<style>
+	.login_layout_bg{width:100%;height:100%; background:#000; opacity: 0.7; z-index: 999998; position: fixed;top:0;left:0; display: none}
+	.login_layout_div{width:655px;padding:20px 0;background: #fff;border-radius: 5px;-moz-box-shadow:2px 2px 5px #333333; -webkit-box-shadow:2px 2px 5px #333333; box-shadow:2px 2px 5px #333333; position: fixed;top:50%;margin-top:-220px;left:50%;margin-left:-327px; z-index: 999999;display: none}
+	.login_logo_img{width:275px;margin:15px auto;}
+	.login_logo_x1{width:465px;height:26px;margin:5px auto;}
+	.login_list_btn{width:490px;margin:10px auto;}
+	.login_list_btn li{ float: left;width:200px;height:55px; display: block; background: #eb6226; text-align: center; line-height: 55px; border-radius: 5px;margin:15px;}
+	.login_list_btn li a{ font-size: 18px; color: #fff;  font-weight: bold; }
+	.login_p{ color: #666666; font-size: 14px; line-height: 40px; text-align:  center;margin-top:50px; }
+	.login_btn_zc{ background: #1a71b4 !important; }
+	.login_close{ position: absolute;top:15px;right:15px; cursor: pointer}
+	.nav_div a { text-decoration:none}
+</style>
+<div class="login_layout_bg"></div>
+<div class="login_layout_div">
+	<div class="login_close"><img src="https://www.cnsoftbei.com/statics/images/images/login_close.jpg"></div>
+	<div class="login_logo_img"><img src="https://www.cnsoftbei.com/statics/images/images/login_logo.jpg"></div>
+	<div class="login_logo_x1"><img src="https://www.cnsoftbei.com/statics/images/images/login_x1.jpg"></div>
+	<ul class="login_list_btn">
+		<li><a href="https://www.cnsoftbei.com/join/">登录</a></li>
+		<!--<li><a href="http://join.cnsoftbei.com/join/company/login.php">企业登录</a></li> -->
+		<li class="login_btn_zc"><a href="https://www.cnsoftbei.com/join/user/signup">注册</a></li>
+		<!-- <li class="login_btn_zc"><a href="http://join.cnsoftbei.com/join/company/TOS.php">企业注册</a></li> -->
+	</ul>
+	<div class="clear"></div>
+	<p class="login_p">联系我们：</p>
+</div>
+<style>
+	.d4{
+ width: 0; 
+ height: 0;
+ border-width: 10px;
+ border-style: solid;
+ border-color: transparent #fff transparent transparent;
+ transform: rotate(180deg); /*顺时针旋转90°*/
+ position: absolute;
+ top:40px;
+ right:-20px;
+
+
+}
+.qq_div{padding:25px 10px 20px 10px; background: #fff; border-radius: 10px;width:125px;position: absolute;top:82px;left:-180px;box-shadow: 0 0 10px #d8d8d8; display: none}
+.wx_div{padding:10px; background: #fff; border-radius: 10px;width:170px;position: absolute;top:135px;left:-220px;box-shadow: 0 0 10px #d8d8d8;  display: none}
+.qq_div h2{ text-align: left;color: #333333; font-size: 14px; border-left: 2px #1a71b4 solid; line-height: 14px;}
+.qq_div p{ text-align: left;color: #333333; font-size: 14px; line-height:26px;}
+</style>
+<script type="text/javascript"> 
+    $(document).ready(function(){
+		
+		$(".fd_div a").mouseover(function(){
+		$(".tc_fd").css("display","none");
+		
+		var attr_c=$(this).attr("tc");
+		$(this).addClass("jg_bq1_hover");
+		$("."+attr_c).css("display","block");;
+		});
+		$(".fd_div a").mouseout(function(){
+		$(".tc_fd").css("display","none");
+		});
+
+
+		$(".login_div a").click(function(){
+		$(".login_layout_bg").css("display","block");
+		$(".login_layout_div").css("display","block");
+		});
+
+		 $(".login_close").click(function(){
+		$(".login_layout_bg").css("display","none");
+		$(".login_layout_div").css("display","none");
+		});
+		
+		$(".loginRignt").click(function(){
+		$(".login_layout_bg").css("display","block");
+		$(".login_layout_div").css("display","block");
+		});
+
+    });
+    </script>
+<div class="fd_div">
+	<div class="fd_div_d">
+	<a href="#" onclick="return false" class="loginRignt"><img src="https://www.cnsoftbei.com/statics/images/images/xf_1.jpg"></a>
+	<a href="" tc="qq_div"><img src="https://www.cnsoftbei.com/statics/images/images/xf_2.jpg"></a>
+	<a href="" tc="wx_div"><img src="https://www.cnsoftbei.com/statics/images/images/xf_3.jpg"></a>
+	<a href=""><img src="https://www.cnsoftbei.com/statics/images/images/xf_4.jpg"></a>
+	</div>
+	<div class="qq_div tc_fd">
+		<div class="d4"></div>
+		<h2 style="padding-bottom:5px;">&ensp; 老师群</h2>
+		<p>868384661</p>
+		<div style="border-top:1px #f5f5f5 solid;margin-top:5px;padding-top:15px;"></div>
+		<h2>&ensp; 学生群</h2>
+		<p>141102123</p>
+		
+		
+	</div>
+	<div class="wx_div tc_fd">
+		<div class="d4"></div>
+		<div class="tc_ewm"><img src="https://www.cnsoftbei.com/statics/images/images/ruanjianbei.jpg" style="width:157;height:165;"></div>
+	</div>
+</div>
+<div class="header_top">
+	<div class="header_top_div">
+	<div class="header_top_left">客服电话：</div>
+	<div class="header_top_right">
+		<!-- <a href="">注册</a><a href="">登陆</a> -->
+	</div>
+	</div>
+</div>
+<div class="top_header_div">
+<div class="top_header">
+  <div class="logo"><a href="#"><img src="https://www.cnsoftbei.com/statics/images/images/logo.png"></a></div>
+  <div class="login_div"><a href="https://www.cnsoftbei.com/join/" onclick="return false">登录/注册</a></div>
+  <div class="nav_div">
+	<a href="https://www.cnsoftbei.com/" class="nav_div_hover" target="_blank">首页</a>
+    <a href="https://www.cnsoftbei.com/list-17-1.html" target="_blank">大赛简介</a>
+	<a href="https://www.cnsoftbei.com/list-1-1.html" target="_blank">新闻动态</a>
+	<a href="https://www.cnsoftbei.com/list-18-1.html" target="_blank">组织机构</a>
+	<a href="https://www.cnsoftbei.com/list-19-1.html" target="_blank">往届赛题</a>
+	<a href="https://www.cnsoftbei.com/list-48-1.html" target="_blank">企业专区</a>
+	<a href="https://www.cnsoftbei.com/list-49-1.html" target="_blank">高校专区</a>
+	<a href="https://www.cnsoftbei.com/list-68-1.html" target="_blank">实习就业</a>
+	<a href="#" target="_blank">English</a>
+  </div>
+
+</div>
+<div class="clear"></div>
+</div>
+
+<!---------------------------------------------------------------------------------------------------------------手机站导航开始---------->
+<div class="sp_header">
+  <div class="sp_logo"><a href="#"><img src="https://www.cnsoftbei.com/statics/images/images/logo.png"></a></div>
+  <div class="sp_nav"> <span></span> <span></span> <span></span> </div>
+</div>
+<div class="sjj_nav">
+  <ul>
+  	<li ><a href="https://www.cnsoftbei.com/join/">登录/注册</a></li>
+    <li> <a href="https://www.cnsoftbei.com/">首页</a></li>
+    <li> <a href="https://www.cnsoftbei.com/list-17-1.html">大赛简介</a></li>
+    <li><a href="https://www.cnsoftbei.com/list-1-1.html">新闻动态</a></li>
+    <li><a href="https://www.cnsoftbei.com/list-18-1.html">组织机构</a></li>
+    <li><a href="https://www.cnsoftbei.com/list-19-1.html">往届赛题</a></li>
+    <li><a href="https://www.cnsoftbei.com/list-48-1.html">企业专区</a></li>
+    <li><a href="https://www.cnsoftbei.com/list-49-1.html">高校专区</a></li>
+    <li><a href="https://www.cnsoftbei.com/list-68-1.html">实习就业</a></li>
+    <li><a href="+">English</a></li>
+  </ul>
+</div>
+<!---------------------------------------------------------------------------------------------------------------手机站导航结束----------> 
+
+
+
+<div class="clear"></div><div class="banner_nr"></div>
+<div class="mb_banner"><img src="https://www.cnsoftbei.com/statics/images/images/h5_banner.jpg"></div>
+<div class="layout_div" style="background:#fafafa  url(https://www.cnsoftbei.com/statics/images/images/bg9.jpg) top  center  no-repeat;">
+<div class="layout">
+	<div class="layout_neirong">
+		<div class="neirong_tittle_h2"><div class="mb_list"><a href="https://www.cnsoftbei.com/list-2-1.html">比赛题目</a> > <a href="https://www.cnsoftbei.com/list-15-1.html">信息技术应用创新</a> > </div><a href="" class="mb_list_more"><img src="https://www.cnsoftbei.com/statics/images/images/nr_icon.jpg"></a><div class="clear"></div></div>
+		<style>
+.pdf_img img{width:16px !important;height:16px  !important; position: relative;top: 3px; left: -3px;}
+
+</style>
+        <div class="layout_cont">
+        <h2>B1-基于大模型技术的软件实训教学结果检查评价与报表系统</h2>
+        <h3>时间：2026-03-23 14:41:34</h3>
+		<style>
+			.cont_n_p img{
+				text-align:center;
+			}
+			.cont_n_p table,table tr th, table tr td{
+				border:1px solid #000000;
+			}
+			.cont_n_p{word-wrap: break-word;}
+			.cont_n_p p{line-height:32px !important;}
+		</style>
+        <div class="cont_n_p">
+
+			<div style="text-align: center;"><strong style="text-align: center; background: none; font-family: 微软雅黑; font-size: 16px; padding: 0px; margin: 0px; border: 0px currentcolor; outline: 0px; vertical-align: baseline; color: rgb(51, 51, 51); margin-block: 0em;">第十五届中国软件杯大赛--</strong><span style="text-align: center; background: none; font-family: 微软雅黑; font-size: 16px; padding: 0px; margin: 0px; border: 0px currentcolor; outline: 0px; vertical-align: baseline; color: rgb(0, 112, 192); margin-block: 0em;"><strong style="padding: 0px; margin: 0px; border: 0px currentcolor; outline: 0px; vertical-align: baseline; background: none; margin-block: 0em;">B组赛题</strong></span></div>
+<p style="padding: 0px; margin: 15px 0px 0px; font-family: 微软雅黑; border: 0px currentcolor; outline: 0px; font-size: 16px; vertical-align: baseline; background-image: initial; background-position: initial; background-size: initial; background-repeat: initial; background-attachment: initial; background-origin: initial; background-clip: initial; color: rgb(51, 51, 51); text-align: center; line-height: 28px; margin-block: 0em;"><strong style="padding: 0px; margin: 0px; border: 0px currentcolor; outline: 0px; vertical-align: baseline; background: none; margin-block: 0em;">赛题名称:基于大模型技术的软件实训教学结果检查评价与报表系统</strong></p>
+<p style="padding: 0px; margin: 15px 0px 20px; font-family: 微软雅黑; border: 0px currentcolor; outline: 0px; font-size: 16px; vertical-align: baseline; background-image: initial; background-position: initial; background-size: initial; background-repeat: initial; background-attachment: initial; background-origin: initial; background-clip: initial; color: rgb(51, 51, 51); text-align: center; line-height: 28px; margin-block: 0em;"><strong style="padding: 0px; margin: 0px; border: 0px currentcolor; outline: 0px; vertical-align: baseline; background: none; margin-block: 0em;">组类：</strong><strong style="padding: 0px; margin: 0px; border: 0px currentcolor; outline: 0px; vertical-align: baseline; background: none; margin-block: 0em;">B组（高职）</strong><br style="padding: 0px; margin-block: 0em; margin: 0px;" />
+<span style="padding: 0px; border: 0px; outline: 0px; font-size: 18px; vertical-align: baseline; background: transparent; margin-block: 0em; margin: 0px;"><strong style="padding: 0px; border: 0px; outline: 0px; vertical-align: baseline; background: transparent; margin-block: 0em; margin: 0px;"><span style="padding: 0px; border: 0px; outline: 0px; vertical-align: baseline; background: transparent; margin-block: 0em; margin: 0px; color: rgb(0, 112, 192);">出题企业：</span></strong></span><strong style="padding: 0px; margin: 0px; border: 0px currentcolor; outline: 0px; font-size: 18px; vertical-align: baseline; background: none; color: rgb(0, 112, 192); margin-block: 0em;">龙芯中科技术股份有限公司</strong><br />
+<strong style="background: transparent; padding: 0px; border: 0px; outline: 0px; font-size: 18px; vertical-align: baseline; color: rgb(0, 112, 192); margin-block: 0em; margin: 0px;">答疑QQ群：811384187</strong><br />
+&nbsp;</p>
+<table border="1" cellpadding="1" cellspacing="1" style="width: 880px;">
+<tbody>
+	<tr>
+	<td>
+	<p>赛题简介：介绍整个赛题的实现目标、实用价值、涉及技术和整体要求</p>
+	</td>
+	<td>
+	<p>本赛题聚焦实训教学评价管理。围绕大模型技术的落地应用，构建一套覆盖软件实训全流程的自动化、智能化检查评价体系。具备显著的教学实用价值。对教师而言，大幅减轻批量批改代码、审核文档的工作量，规避人工评价的主观偏差，提升实训检查效率与评价客观性;对学校而言，汇聚实训全量数据形成教学质量画像，为课程体系优化、实训方案调整提供数据支撑;对学生而言，获得即时性评价反馈与薄弱点分析，助力针对性补漏，强化实训效果与自主学习能力。<br />
+	&nbsp;</p>
+	</td>
+	</tr>
+	<tr>
+	<td>
+	<p>赛题业务场景：描述赛题相关的真实企业业务背景。从真实场景中，适当简化或者提炼出适合比赛的赛题场景</p>
+	</td>
+	<td>
+	<p>当前职业教育机构及高校校企合作项目中，普遍存在软件实训成果评估效率低、标准不统一的痛点。企业内训或实训基地需批量审核学员代码、项目文档，传统人工方式耗时久、主观偏差大，且难以快速形成数据化评估报告供复盘优化;高校与企业协同实训时，也需一套兼顾教学要求与企业标准的评价工具，打通实训成果与岗位需求的衔接。基于此，本赛题聚焦&ldquo;高校-企业协同实训&rdquo;核心场景，打造智能化实训评价系统。</p>
+	<p>基于上述业务背景，聚焦教育行业软件实训教学，参赛者可基于本地大模型或公有云大模型API，开发覆盖实训成果上传、智能核查、多维度评价、报表生成与导出(支持Excel/PDF格式)、评价标准自定义等核心场景。</p>
+	<p>&nbsp;</p>
+	</td>
+	</tr>
+	<tr>
+	<td>
+	<p>基本功能需求</p>
+	</td>
+	<td>
+	<p>采用B/S架构开发，软件需部署在自主指令系统LoongArch架构+麒麟高级服务器版上运行(不满足该要求视为0分)。</p>
+	<p>功能要求：</p>
+	<p>1、支持本地大模型服务部署或调用云端大模型服务，具备 PC Web 或 App 可视化界面，方便用户访问与操作；</p>
+	<p>2、实训成果上传与解析：支持文档(Word/PDF)、报告、软件界面操作截图等多格式成果上传，结合大模型技术自动解析文件内容，提取核心信息用于后续核查与评价；</p>
+	<p>3、智能核查功能：实现实训要求与实训效果校验、逻辑漏洞初步识别，同时核查实训步骤完整性，减少人工排查成本；</p>
+	<p>4、多维度评价管理：可支持自定义评价指标(如代码质量、文档规范性、功能实现度等)及权重分配，结合大模型技术能力给出客观评分，同时预留教师主观评分入口，兼顾智能化与灵活性；</p>
+	<p>5、报表生成与导出：生成实训评价报告、科目实训数据统计报表，支持Excel/PDF格式导出，报表含可视化图表，直观呈现评价结果。<br />
+	&nbsp;</p>
+	</td>
+	</tr>
+	<tr>
+	<td>
+	<p>非功能性需求</p>
+	</td>
+	<td>
+	<p>1、软件界面设计合理、美观大方；</p>
+	<p>2、软件开发文档完整规范；</p>
+	<p>3、人机交互操作便捷，适合用户使用；</p>
+	<p>4、软件保持易用性与稳定性。</p>
+	<p>&nbsp;</p>
+	</td>
+	</tr>
+	<tr>
+	<td>
+	<p>实现条件：开发环境、实验平台、开发语言、数据库、编译器、涉及硬件等</p>
+	</td>
+	<td>
+	<p>大赛由龙芯云平台提供远程开发环境，远程虚拟机(虚机为自主指令集LoongArch架构)<br />
+	<font color="#ff0000" style="padding: 0px; margin-block: 0em; margin: 0px; font-family: 微软雅黑; border: 0px; outline: 0px; font-size: 16px; vertical-align: baseline; background-image: initial; background-position: initial; background-size: initial; background-repeat: initial; background-attachment: initial; background-origin: initial; background-clip: initial;">虚拟机已陆续开始发放，申请说明详见本赛题答疑qq群（</font><span style="padding: 0px; margin-block: 0em; margin: 0px; font-family: 微软雅黑; border: 0px; outline: 0px; font-size: 16px; vertical-align: baseline; background-image: initial; background-position: initial; background-size: initial; background-repeat: initial; background-attachment: initial; background-origin: initial; background-clip: initial; color: rgb(255, 0, 0);">811384187</span><font color="#ff0000" style="padding: 0px; margin-block: 0em; margin: 0px; font-family: 微软雅黑; border: 0px; outline: 0px; font-size: 16px; vertical-align: baseline; background-image: initial; background-position: initial; background-size: initial; background-repeat: initial; background-attachment: initial; background-origin: initial; background-clip: initial;">）</font><span style="padding: 0px; margin-block: 0em; margin: 0px; font-family: 微软雅黑; border: 0px; outline: 0px; font-size: 16px; vertical-align: baseline; background-image: initial; background-position: initial; background-size: initial; background-repeat: initial; background-attachment: initial; background-origin: initial; background-clip: initial; color: rgb(255, 0, 0);">群文件</span></p>
+	<p>操作系统：银河麒麟高级服务器操作系统 V11/V10</p>
+	<p>开发语言：不限</p>
+	<p>技术框架：不限</p>
+	<p>实训软件：不限</p>
+	<p>&nbsp;</p>
+	</td>
+	</tr>
+	<tr>
+	<td>
+	<p>测试数据或平台：提供给参赛者的测试环境和测试数据。</p>
+	</td>
+	<td>
+	<p>无</p>
+	</td>
+	</tr>
+	<tr>
+	<td>
+	<p>开发所需设备及设备指标需求说明</p>
+	</td>
+	<td>
+	<p>CPU采用自主指令集LoongArch架构CPU、操作系统采用银河麒麟高级服务器操作系统 V11/V10。</p>
+	<p>CPU核数：四核</p>
+	<p>内存：8GB以上</p>
+	<p>硬盘：256GB以上</p>
+	<p>&nbsp;</p>
+	</td>
+	</tr>
+	<tr>
+	<td>
+	<p>文档及其他要求</p>
+	</td>
+	<td>
+	<p>1、软件功能需求分析文档</p>
+	<p>2、软件功能设计文档</p>
+	<p>3、软件产品说明书</p>
+	<p>4、软件功能测试报告</p>
+	<p>5、软件安装包及部署文档</p>
+	<p>&nbsp;</p>
+	</td>
+	</tr>
+	<tr>
+	<td>
+	<p>各评分项及大致占比</p>
+	</td>
+	<td>
+	<p>功能完整性(30%)</p>
+	<p>用户体验(20%)</p>
+	<p>创新与实用性(20%)</p>
+	<p>文档与演示(20%)</p>
+	<p>商业可行性(10%)</p>
+	<p>&nbsp;</p>
+	</td>
+	</tr>
+	<tr>
+	<td>
+	<p>初赛作品提交要求</p>
+	</td>
+	<td>
+	<p>1、软件功能需求分析文档</p>
+	<p>2、软件功能设计文档</p>
+	<p>3、软件产品说明书</p>
+	<p>4、软件功能测试报告</p>
+	<p>5、软件安装包及部署文档</p>
+	<p>6、软件源文件</p>
+	<p>7、软件功能演示PPT文档</p>
+	<p>8、功能演示视频（格式为.avi、.mp4、.wmv之一，时长不超过7分钟）</p>
+	<p>&nbsp;</p>
+	</td>
+	</tr>
+</tbody>
+</table>
+<p style="padding: 0px; margin: 15px 0px 20px; font-family: 微软雅黑; border: 0px currentcolor; outline: 0px; font-size: 16px; vertical-align: baseline; background-image: initial; background-position: initial; background-size: initial; background-repeat: initial; background-attachment: initial; background-origin: initial; background-clip: initial; color: rgb(51, 51, 51); line-height: 28px; margin-block: 0em; text-align: justify;"><span style="color: rgb(127, 127, 127); font-size: 18px; text-align: center;">【参赛团队作品中团队自主开发部分的软件作品著作权归参赛团队所有，其中具有市场应用及拓展的优秀作品，出题企业具有优先权，可以优先合作开发或者优先购买。另如基于该作品的任何合作升级开发、市场拓展等活动，以及在这一过程中所获得的任何商业费用，出题企业应与参赛团队协商解决。】</span><br />
+&nbsp;</p>
+
+        </div>
+    </div>
+	</div>
+    <div class="layout_neirong_more">
+        <div><span>上一篇:</span><a href="https://www.cnsoftbei.com/content-15-1247-1.html">A2-面向麒麟操作系统的安全智能运维Agent 设计与实现</a></div>
+        <div><span>下一篇:</span><a href="https://www.cnsoftbei.com/content-15-1249-1.html">B2-基于银河麒麟操作系统的AI智能匹配与能力图谱系统</a></div>
+    </div>
+</div>
+
+</div>
+<div class="foot_div">
+  <div class="foot">
+    <!--<div class="foot_left1">
+    <h2>主办单位</h2>
+			<p>工业和信息化部</p>
+      <p>教育部</p>
+      <p>江苏省人民政府</p>
+    </div>
+    <div class="foot_left2">
+    	<h2>承办单位</h2>
+      <p>中国电子信息产业发展研究院</p>
+			<p>江苏省工业和信息化厅</p>
+      <p>江苏省教育厅</p>
+      <p>教育部高等学校计算机类专业教学指导委员会</p>
+      <p>南京航空航天大学</p>
+    </div>
+    <div class="foot_left3">
+    	<h2>执行单位</h2>
+      <p>中国信息化周报</p>
+			<p>中国（南京）软件谷</p>
+      <p>江苏软件产业人才发展基金会</p>
+    </div>-->
+    <div class="foot_left1">
+    	<h2>关于我们</h2>
+      <p>客服电话：</p>
+      <p>咨询时间：工作日9点-11点 14点-17点</p>
+	  <p>大赛邮箱：cnsoftbei@qq.com</p>
+      <p>邮编：100048</p>
+      <p>联系地址:北京市海淀区紫竹院路66号赛迪大厦18层</p>
+
+    </div>
+    <div class="clear"></div>
+  </div>
+  <div class="cy2"><a href="https://beian.miit.gov.cn" style="color:#c8c8c8;">网站备案/许可证号：京ICP备05039896号-10</a> &nbsp;&nbsp;&nbsp; 京公网安备 11010802020860号</div>
+</div>
+
+
+</body></html>

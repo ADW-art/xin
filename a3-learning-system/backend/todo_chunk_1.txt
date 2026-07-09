@@ -1,0 +1,31 @@
+linux|UNIX环境高级编程(第三版).pdf|E:/code/github_clone/pdf-计算机专业资源/Some-Many-Books/PDF-file\linux\UNIX环境高级编程(第三版).pdf|linux/UNIX环境高级编程(第三版).pdf
+linux|UNIX编程艺术.pdf|E:/code/github_clone/pdf-计算机专业资源/Some-Many-Books/PDF-file\linux\UNIX编程艺术.pdf|linux/UNIX编程艺术.pdf
+linux|UNIX网络编程卷2：进程间通信.pdf|E:/code/github_clone/pdf-计算机专业资源/Some-Many-Books/PDF-file\linux\UNIX网络编程卷2：进程间通信.pdf|linux/UNIX网络编程卷2：进程间通信.pdf
+linux|深入Linux内核架构.pdf|E:/code/github_clone/pdf-计算机专业资源/Some-Many-Books/PDF-file\linux\深入Linux内核架构.pdf|linux/深入Linux内核架构.pdf
+linux|深入理解linux内核（第三版）.pdf|E:/code/github_clone/pdf-计算机专业资源/Some-Many-Books/PDF-file\linux\深入理解linux内核（第三版）.pdf|linux/深入理解linux内核（第三版）.pdf
+microservice|微服务设计.pdf|E:/code/github_clone/pdf-计算机专业资源/Some-Many-Books/PDF-file\microservice\微服务设计.pdf|microservice/微服务设计.pdf
+mongodb|MongoDB权威指南.pdf|E:/code/github_clone/pdf-计算机专业资源/Some-Many-Books/PDF-file\mongodb\MongoDB权威指南.pdf|mongodb/MongoDB权威指南.pdf
+mysql|MySQL性能调优与架构设计.pdf|E:/code/github_clone/pdf-计算机专业资源/Some-Many-Books/PDF-file\mysql\MySQL性能调优与架构设计.pdf|mysql/MySQL性能调优与架构设计.pdf
+mysql|SQL基础教程.pdf|E:/code/github_clone/pdf-计算机专业资源/Some-Many-Books/PDF-file\mysql\SQL基础教程.pdf|mysql/SQL基础教程.pdf
+mysql|SQL学习指南.pdf|E:/code/github_clone/pdf-计算机专业资源/Some-Many-Books/PDF-file\mysql\SQL学习指南.pdf|mysql/SQL学习指南.pdf
+nodejs|Node即学即用.pdf|E:/code/github_clone/pdf-计算机专业资源/Some-Many-Books/PDF-file\nodejs\Node即学即用.pdf|nodejs/Node即学即用.pdf
+nodejs|Node学习指南.pdf|E:/code/github_clone/pdf-计算机专业资源/Some-Many-Books/PDF-file\nodejs\Node学习指南.pdf|nodejs/Node学习指南.pdf
+nodejs|了不起的Node.js.pdf|E:/code/github_clone/pdf-计算机专业资源/Some-Many-Books/PDF-file\nodejs\了不起的Node.js.pdf|nodejs/了不起的Node.js.pdf
+others|程序员修炼之道：从小工到专家.pdf|E:/code/github_clone/pdf-计算机专业资源/Some-Many-Books/PDF-file\others\程序员修炼之道：从小工到专家.pdf|others/程序员修炼之道：从小工到专家.pdf
+others|程序员的自我修养：链接、装载与库.pdf|E:/code/github_clone/pdf-计算机专业资源/Some-Many-Books/PDF-file\others\程序员的自我修养：链接、装载与库.pdf|others/程序员的自我修养：链接、装载与库.pdf
+others|高效程序员的45个习惯.pdf|E:/code/github_clone/pdf-计算机专业资源/Some-Many-Books/PDF-file\others\高效程序员的45个习惯.pdf|others/高效程序员的45个习惯.pdf
+python|Python基础教程（第2版）.pdf|E:/code/github_clone/pdf-计算机专业资源/Some-Many-Books/PDF-file\python\Python基础教程（第2版）.pdf|python/Python基础教程（第2版）.pdf
+python|Python源码剖析.pdf|E:/code/github_clone/pdf-计算机专业资源/Some-Many-Books/PDF-file\python\Python源码剖析.pdf|python/Python源码剖析.pdf
+redis|Redis入门指南（第2版）.pdf|E:/code/github_clone/pdf-计算机专业资源/Some-Many-Books/PDF-file\redis\Redis入门指南（第2版）.pdf|redis/Redis入门指南（第2版）.pdf
+redis|Redis实战.pdf|E:/code/github_clone/pdf-计算机专业资源/Some-Many-Books/PDF-file\redis\Redis实战.pdf|redis/Redis实战.pdf
+redis|Redis设计与实现.pdf|E:/code/github_clone/pdf-计算机专业资源/Some-Many-Books/PDF-file\redis\Redis设计与实现.pdf|redis/Redis设计与实现.pdf
+system|企业集成模式：设计、构建及部署消息传递解决方案.pdf|E:/code/github_clone/pdf-计算机专业资源/Some-Many-Books/PDF-file\system\企业集成模式：设计、构建及部署消息传递解决方案.pdf|system/企业集成模式：设计、构建及部署消息传递解决方案.pdf
+system|大型网站技术架构：核心原理与案例分析.pdf|E:/code/github_clone/pdf-计算机专业资源/Some-Many-Books/PDF-file\system\大型网站技术架构：核心原理与案例分析.pdf|system/大型网站技术架构：核心原理与案例分析.pdf
+test|测试驱动开发.pdf|E:/code/github_clone/pdf-计算机专业资源/Some-Many-Books/PDF-file\test\测试驱动开发.pdf|test/测试驱动开发.pdf
+materials|C++ 程序设计语言：第4部分 标准库（原书第4版 (Bjarne Stroustrup) (z-library.sk, 1lib.sk, z-lib.sk).pdf|app/scripts/knowledge_materials\C++ 程序设计语言：第4部分 标准库（原书第4版 (Bjarne Stroustrup) (z-library.sk, 1lib.sk, z-lib.sk).pdf|materials/C++ 程序设计语言：第4部分 标准库（原书第4版 (Bjarne Stroustrup) (z-library.sk, 1lib.sk, z-lib.sk).pdf
+materials|C++程序设计语言.第1～3部分.原书第4版 (Bjarne Stroustrup) (z-library.sk, 1lib.sk, z-lib.sk) (1).pdf|app/scripts/knowledge_materials\C++程序设计语言.第1～3部分.原书第4版 (Bjarne Stroustrup) (z-library.sk, 1lib.sk, z-lib.sk) (1).pdf|materials/C++程序设计语言.第1～3部分.原书第4版 (Bjarne Stroustrup) (z-library.sk, 1lib.sk, z-lib.sk) (1).pdf
+materials|C++程序设计语言.第1～3部分.原书第4版 (Bjarne Stroustrup) (z-library.sk, 1lib.sk, z-lib.sk) (2).pdf|app/scripts/knowledge_materials\C++程序设计语言.第1～3部分.原书第4版 (Bjarne Stroustrup) (z-library.sk, 1lib.sk, z-lib.sk) (2).pdf|materials/C++程序设计语言.第1～3部分.原书第4版 (Bjarne Stroustrup) (z-library.sk, 1lib.sk, z-lib.sk) (2).pdf
+materials|C++程序设计语言.第1～3部分.原书第4版 (Bjarne Stroustrup) (z-library.sk, 1lib.sk, z-lib.sk).pdf|app/scripts/knowledge_materials\C++程序设计语言.第1～3部分.原书第4版 (Bjarne Stroustrup) (z-library.sk, 1lib.sk, z-lib.sk).pdf|materials/C++程序设计语言.第1～3部分.原书第4版 (Bjarne Stroustrup) (z-library.sk, 1lib.sk, z-lib.sk).pdf
+materials|C程序设计（第五版）学习辅导 (谭浩强)（OCR） (谭浩强) (z-library.sk, 1lib.sk, z-lib.sk) (1).pdf|app/scripts/knowledge_materials\C程序设计（第五版）学习辅导 (谭浩强)（OCR） (谭浩强) (z-library.sk, 1lib.sk, z-lib.sk) (1).pdf|materials/C程序设计（第五版）学习辅导 (谭浩强)（OCR） (谭浩强) (z-library.sk, 1lib.sk, z-lib.sk) (1).pdf
+materials|C程序设计（第五版）学习辅导 (谭浩强)（OCR） (谭浩强) (z-library.sk, 1lib.sk, z-lib.sk).pdf|app/scripts/knowledge_materials\C程序设计（第五版）学习辅导 (谭浩强)（OCR） (谭浩强) (z-library.sk, 1lib.sk, z-lib.sk).pdf|materials/C程序设计（第五版）学习辅导 (谭浩强)（OCR） (谭浩强) (z-library.sk, 1lib.sk, z-lib.sk).pdf
+materials|C语言程序设计（第五版） (谭浩强) (z-library.sk, 1lib.sk, z-lib.sk).pdf|app/scripts/knowledge_materials\C语言程序设计（第五版） (谭浩强) (z-library.sk, 1lib.sk, z-lib.sk).pdf|materials/C语言程序设计（第五版） (谭浩强) (z-library.sk, 1lib.sk, z-lib.sk).pdf

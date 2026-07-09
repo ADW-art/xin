@@ -157,7 +157,7 @@ async function addImages(files: FileList | File[]) {
         type: file.type,
       })
     } catch {
-      console.error('图片读取失败:', file.name)
+      if (import.meta.env.DEV) console.error('图片读取失败:', file.name)
     }
   }
 }

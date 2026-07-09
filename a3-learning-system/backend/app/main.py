@@ -2,9 +2,11 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import settings
-from app.core.database import engine, Base
+from app.core.database import Base
 from app.core.rate_limit import RateLimiter
 from app.models.user import User
 from app.models.profile import LearningProfile
@@ -15,6 +17,7 @@ from app.models.conversation import Conversation
 from app.models.answer_record import AnswerRecord
 from app.models.bkt_state import BKTState
 from app.models.review_schedule import ReviewScheduleModel
+from app.models.node_resource import NodeResource
 from app.api.chat import router as chat_router
 from app.api.auth import router as auth_router
 from app.api.profile import router as profile_router
@@ -26,6 +29,9 @@ from app.api.admin import router as admin_router
 from app.api.bkt import router as bkt_router
 from app.api.agent_trace import router as agent_trace_router
 from app.api.tts import router as tts_router
+from app.api.review import router as review_router
+from app.api.recommend import router as recommend_router
+from app.api.video import router as video_router
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +40,64 @@ app = FastAPI(
     description="基于大模型的个性化资源生成与学习多智能体系统",
     version="0.1.0",
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """请求参数校验失败处理"""
+    return JSONResponse(
+        status_code=422,
+        content={"detail": "请求参数无效", "errors": exc.errors()},
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """捕获所有未处理异常，防止 SSE 响应被异常关闭导致 ECONNRESET
+    参考 Starlette/FastAPI 最佳实践：兜底异常处理器 + 详细日志
+    """
+    import uuid
+    trace_id = uuid.uuid4().hex[:12]
+    logger.error(
+        "Unhandled exception trace_id=%s path=%s type=%s message=%s",
+        trace_id, request.url.path, type(exc).__name__, str(exc),
+        exc_info=True,
+    )
+    # 对 SSE 端点返回流式错误事件，避免 ECONNRESET
+    if "/chat/send" in request.url.path or "/agent/" in request.url.path:
+        from fastapi.responses import StreamingResponse
+        import json as _json
+        async def _error_stream():
+            yield f"event: error\ndata: {_json.dumps({'message': '服务器内部错误', 'code': 'INTERNAL', 'trace_id': trace_id}, ensure_ascii=False)}\n\n"
+            yield f"event: done\ndata: {_json.dumps({'status': 'error'}, ensure_ascii=False)}\n\n"
+        return StreamingResponse(
+            _error_stream(),
+            status_code=200,
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Trace-Id": trace_id},
+        )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "服务器内部错误", "trace_id": trace_id},
+        headers={"X-Trace-Id": trace_id},
+    )
+
+# ── 全局 404 处理器 — 返回 JSON 而不是 HTML，避免探针/监控噪声 ──
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    if exc.status_code == 404:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "detail": "Endpoint not found",
+                "path": request.url.path,
+                "hint": "Try /api/health or /docs",
+            },
+        )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+    )
 
 # ── CORS 中间件（从环境变量读取允许的来源） ──
 cors_origins = [origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()]
@@ -51,8 +115,9 @@ _rate_limiter = RateLimiter(auth_limit=500, anon_limit=60, window_seconds=60)
 
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
-    """滑动窗口限流：已认证按user_id(500/min)，匿名按IP(60/min)。/api/health 豁免。"""
-    if request.url.path == "/api/health":
+    """滑动窗口限流：已认证按user_id(500/min)，匿名按IP(60/min)。
+    /api/health 和 / 根路径豁免（用于监控/探针）。"""
+    if request.url.path in ("/api/health", "/"):
         return await call_next(request)
 
     state = _rate_limiter.check(request)
@@ -85,18 +150,27 @@ app.include_router(admin_router)
 app.include_router(bkt_router)
 app.include_router(agent_trace_router)
 app.include_router(tts_router)
+app.include_router(review_router)
+app.include_router(recommend_router)
+app.include_router(video_router)
 
 @app.on_event("startup")
 async def init_db():
     import asyncio
     try:
-        await asyncio.get_event_loop().run_in_executor(
-            None, Base.metadata.create_all, engine
-        )
+        # 用 ensure_db_initialized() 拿到内部 _engine 引用,避免顶层 import engine 触发重连
+        from app.core.database import ensure_db_initialized
+        ensure_db_initialized()
+        from app.core.database import _engine as _db_engine
+        await asyncio.to_thread(Base.metadata.create_all, _db_engine)
         logger.info("数据库表初始化完成")
     except Exception as e:
         logger.warning("数据库连接失败: %s", e)
         logger.warning("服务已启动，但数据库功能不可用。请检查 MySQL 是否运行。")
+
+    # JWT 安全校验: 启动时检测默认密钥
+    if settings.jwt_secret_key == "change_this_to_random_string_32_chars":
+        logger.warning("⚠️  JWT_SECRET_KEY 仍为默认值！请立即在 .env 中设置 JWT_SECRET_KEY")
 
     # BGE 模型后台预热（不阻塞启动，最多重试3次，未就绪时 Agent 自动降级为纯 LLM）
     import threading
@@ -144,8 +218,73 @@ async def init_db():
         except Exception as e:
             logger.warning("教材知识库索引失败: %s", e)
     threading.Thread(target=_load_content_library, daemon=True).start()
+    # Pre-warm DB engine (moves 10s delay to startup)
+    try:
+        from app.core.database import ensure_db_initialized
+        ensure_db_initialized()
+    except Exception:
+        pass
+
+
+@app.get("/")
+async def root():
+    """根路径欢迎页 — 防止监控/探针工具的 GET / 报 404"""
+    return {
+        "name": "A3 Learning System API",
+        "version": "0.1.0",
+        "status": "running",
+        "docs": "/docs",
+        "health": "/api/health",
+    }
 
 
 @app.get("/api/health")
 async def health_check():
-    return {"status": "ok", "version": "0.1.0"}
+    status = {"status": "ok", "version": "0.1.0"}
+    checks = {}
+
+    # MySQL check
+    try:
+        from app.core.database import SessionLocal
+        from sqlalchemy import text  # SQLAlchemy 2.x 必须显式 text() 包裹字符串 SQL
+        db = SessionLocal()
+        db.execute(text("SELECT 1"))
+        db.close()
+        checks["mysql"] = "ok"
+    except Exception as e:
+        checks["mysql"] = f"error: {e}"
+        status["status"] = "degraded"
+
+    # Redis check
+    try:
+        import redis
+        r = redis.from_url(settings.redis_url, socket_connect_timeout=2)
+        r.ping()
+        r.close()
+        checks["redis"] = "ok"
+    except Exception as e:
+        checks["redis"] = f"error: {e}"
+        status["status"] = "degraded"
+
+    # ChromaDB check
+    try:
+        from app.core.chroma_client import get_collection
+        col = get_collection("knowledge_base")
+        checks["chromadb"] = f"ok ({col.count() if col else 0} docs)"
+        # RAG model status
+        try:
+            from app.services.rag_service import is_rag_ready, is_bge_loading
+            if is_rag_ready():
+                checks["rag"] = "ready"
+            elif is_bge_loading():
+                checks["rag"] = "loading"
+            else:
+                checks["rag"] = "unavailable"
+        except Exception:
+            checks["rag"] = "error"
+    except Exception as e:
+        checks["chromadb"] = f"error: {e}"
+        status["status"] = "degraded"
+
+    status["checks"] = checks
+    return status

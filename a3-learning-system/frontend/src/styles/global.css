@@ -566,6 +566,17 @@ a:hover { color: var(--primary-hover); }
 
 /* ── Mobile Responsive ── */
 @media (max-width: 768px) {
+  :root {
+    --sidebar-w: 0px;
+    --content-padding: 12px;
+    --header-h: 48px;
+  }
+  body {
+    font-size: 13px;
+  }
+  h1 { font-size: 20px; }
+  h2 { font-size: 17px; }
+  h3 { font-size: 15px; }
   .page { padding: 16px; }
   .chat-layout { flex-direction: column; }
   .col-left, .col-right { display: none; }
@@ -577,4 +588,30 @@ a:hover { color: var(--primary-hover); }
   .report-layout { flex-direction: column; }
   .profile-grid { grid-template-columns: 1fr; }
   .hero h1 { font-size: 20px; }
+  /* Element Plus overrides for mobile */
+  .el-table { font-size: 12px; }
+  .el-button { font-size: 12px !important; padding: 6px 12px !important; }
+  .el-card { border-radius: var(--radius-md) !important; }
+}
+
+@media (max-width: 480px) {
+  :root {
+    --header-h: 44px;
+    --content-padding: 8px;
+    --card-gap: 6px;
+  }
+  body {
+    font-size: 12px;
+  }
+  h1 { font-size: 18px; }
+  h2 { font-size: 15px; }
+  h3 { font-size: 14px; }
+  .page { padding: 10px; }
+  /* Compact cards & tables */
+  .el-table { font-size: 11px; }
+  .el-card { padding: 12px !important; }
+  .el-button { font-size: 11px !important; padding: 5px 10px !important; }
+  .el-form-item { margin-bottom: 12px !important; }
+  .el-dialog { width: 95% !important; }
+  .el-drawer { width: 90% !important; }
 }

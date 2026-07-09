@@ -36,6 +36,22 @@ ResourceDetail 资源详情页
       </el-button>
     </div>
 
+    <!-- 空状态：资源不存在 (加载完成但resource为null) -->
+    <div v-else-if="!loading && !error && !resource" class="error-state a-scale">
+      <svg viewBox="0 0 200 120" class="err-svg" xmlns="http://www.w3.org/2000/svg">
+        <rect x="55" y="18" width="90" height="60" rx="10" fill="rgba(148,163,184,.08)" stroke="rgba(148,163,184,.2)" stroke-width="1.8"/>
+        <circle cx="100" cy="48" r="14" fill="rgba(148,163,184,.12)" stroke="rgba(148,163,184,.25)" stroke-width="1.2"/>
+        <line x1="100" y1="38" x2="100" y2="58" stroke="#94A3B8" stroke-width="2" stroke-linecap="round"/>
+        <line x1="90" y1="48" x2="110" y2="48" stroke="#94A3B8" stroke-width="2" stroke-linecap="round"/>
+        <rect x="72" y="86" width="56" height="5" rx="2.5" fill="rgba(148,163,184,.06)"/>
+        <rect x="80" y="96" width="40" height="4" rx="2" fill="rgba(148,163,184,.05)"/>
+      </svg>
+      <h3>资源不存在或已被删除</h3>
+      <el-button type="primary" @click="$router.push('/resources')">
+        <el-icon><ArrowLeft/></el-icon> 返回资源列表
+      </el-button>
+    </div>
+
     <!-- 资源内容 -->
     <template v-else-if="resource">
       <!-- 顶部导航栏 -->
@@ -70,6 +86,18 @@ ResourceDetail 资源详情页
               <el-icon :size="13"><CollectionTag/></el-icon> {{ resource.knowledge_points.join(' · ') }}
             </span>
           </div>
+
+          <!-- 视频讲解按钮 (仅文档和视频脚本类型) -->
+          <div v-if="isSlideshowType" class="header-actions">
+            <el-button
+              :type="showSlidePlayer ? 'default' : 'primary'"
+              size="default"
+              @click="showSlidePlayer = !showSlidePlayer; autoPlaySlides = !showSlidePlayer"
+            >
+              <el-icon :size="14"><VideoPlay /></el-icon>
+              {{ showSlidePlayer ? '收起讲解' : '视频讲解' }}
+            </el-button>
+          </div>
         </div>
       </div>
 
@@ -95,6 +123,14 @@ ResourceDetail 资源详情页
         <!-- 未知类型兜底 -->
         <div v-else class="markdown-body" v-html="renderedMarkdown"/>
       </div>
+
+      <!-- 视频讲解幻灯片 (仅文档和视频脚本类型) -->
+      <SlidePlayer
+        v-if="isSlideshowType"
+        v-model:visible="showSlidePlayer"
+        :content="resource.content || ''"
+        :auto-play="autoPlaySlides"
+      />
 
       <!-- 评分反馈区域 -->
       <div class="rating-card a-fade-up">
@@ -125,8 +161,9 @@ import { useRoute } from 'vue-router'
 import { marked } from 'marked'
 import { ElMessage } from 'element-plus'
 import DOMPurify from 'dompurify'
-import { ArrowLeft, Loading, Document, Connection, DocumentCopy, EditPen, VideoCamera, Cpu, Clock, CollectionTag, Star, StarFilled } from '@element-plus/icons-vue'
+import { ArrowLeft, Loading, Document, Connection, DocumentCopy, EditPen, VideoCamera, VideoPlay, Cpu, Clock, CollectionTag, Star, StarFilled } from '@element-plus/icons-vue'
 import MindMap from '@/components/resource/MindMap.vue'
+import SlidePlayer from '@/components/resource/SlidePlayer.vue'
 import { getResource, submitFeedback, type ResourceDetail as ResourceDetailType } from '@/api/resource'
 
 const route = useRoute()
@@ -138,6 +175,10 @@ const resource = ref<ResourceDetailType | null>(null)
 const copyLabel = ref('复制代码')
 const ratingLoading = ref(false)
 const currentRating = ref<number | null>(null)  // displayed rating — starts from resource.feedback_score
+
+// ── 视频讲解幻灯片 ──
+const showSlidePlayer = ref(route.query.mode === 'slideshow')
+const autoPlaySlides = ref(route.query.mode === 'slideshow')
 
 // ── 类型映射 ──
 const typeMap: Record<string, { label: string; icon: Component; bg: string; color: string; border: string }> = {
@@ -156,6 +197,12 @@ const typeInfo = computed(() => {
 const isMarkdownType = computed(() => {
   const t = resource.value?.resource_type
   return t === 'document' || t === 'question_set' || t === 'video_script'
+})
+
+// 仅文档和视频脚本资源支持视频讲解幻灯片
+const isSlideshowType = computed(() => {
+  const t = resource.value?.resource_type
+  return t === 'document' || t === 'video_script'
 })
 
 const renderedMarkdown = computed(() => {
@@ -278,6 +325,15 @@ onMounted(async () => {
 .meta-item { display: inline-flex; align-items: center; gap: 4px }
 .kp { color: var(--primary); font-weight: 500 }
 
+/* ── 视频讲解按钮 ── */
+.header-actions {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 10px;
+}
+
 /* ── 内容卡片 ── */
 .content-card {
   background: var(--bg-card);
@@ -361,5 +417,34 @@ onMounted(async () => {
 .rating-hint {
   font-size: var(--font-xs);
   color: var(--text-muted);
+}
+
+/* ═══════════ Responsive ═══════════ */
+@media (max-width: 768px) {
+  .page { padding: 20px 16px 36px; max-width: 100%; }
+  .header-card { padding: 18px 20px; }
+  .resource-title { font-size: 18px; }
+  .content-card { padding: 20px 22px; }
+  .rating-card { padding: 16px 20px; flex-direction: column; align-items: flex-start; gap: 12px; }
+  .code-block { padding: 16px; font-size: 12px; }
+  .header-meta { gap: 10px; }
+}
+
+@media (max-width: 480px) {
+  .page { padding: 12px 10px 28px; }
+  .detail-header { margin-bottom: 12px; }
+  .back-btn { margin-bottom: 8px; font-size: 12px; }
+  .header-card { padding: 14px 16px; border-radius: var(--radius-md); }
+  .header-row { gap: 8px; margin-bottom: 10px; }
+  .resource-title { font-size: 16px; margin-bottom: 8px; }
+  .header-meta { gap: 6px; font-size: 10px; }
+  .content-card { padding: 14px 16px; border-radius: var(--radius-md); }
+  .rating-card { padding: 12px 16px; gap: 8px; }
+  .markdown-body { font-size: 13px; line-height: 1.7; }
+  .markdown-body :deep(h1) { font-size: 18px; }
+  .markdown-body :deep(h2) { font-size: 16px; }
+  .markdown-body :deep(h3) { font-size: 14px; }
+  .markdown-body :deep(pre) { padding: 12px 14px; }
+  .code-block { padding: 12px 14px; font-size: 11px; }
 }
 </style>

@@ -6,6 +6,7 @@ from sqlalchemy import String, Integer, Float, JSON, DateTime, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 from datetime import datetime
+from sqlalchemy import String, Integer, Float, JSON, DateTime, ForeignKey, Text
 
 from app.core.database import Base #工厂函数->创建基类-自动建表
 
@@ -24,6 +25,10 @@ class LearningProfile(Base):
     preferred_resource_type: Mapped[Optional[str]] = mapped_column(String(20))
     dimension_scores: Mapped[Optional[dict]] = mapped_column(JSON)
     suggestions: Mapped[Optional[list]] = mapped_column(JSON)  # Agent联动建议列表
+
+    # v2 - 新增维度（安全冗余）
+    learning_phase: Mapped[Optional[str]] = mapped_column(String(30), default=None)
+    interest_direction: Mapped[Optional[str]] = mapped_column(String(30), default=None)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())

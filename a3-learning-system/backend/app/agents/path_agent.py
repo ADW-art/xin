@@ -16,6 +16,7 @@ import logging
 from datetime import datetime, timedelta
 
 from app.agents.state import AgentState
+from app.agents._msg_compat import last_msg_content  # 兼容 checkpoint 恢复后 dict 格式
 from app.services.bkt_service import get_tracker
 from app.services.dynamic_path_planner import build_planner_from_db
 from app.services.knowledge_graph import get_graph
@@ -37,6 +38,12 @@ PATH_PROMPT = """你是一个学习路径规划专家，风格对标 Coursera �
 
 ## 可用知识点（知识图谱节点 — 必须从中选择，禁止编造）
 {kg_nodes}
+
+## 反幻觉铁律（违反即为不合格）
+1. 禁止编造不在上述KG节点列表中的知识点 — 所有建议知识点必须来自KG
+2. 禁止编造虚假的时间估算 — 每阶段时长必须基于 weekly_hours 和节点数计算
+3. 禁止凭空推荐外部资源 — 不推荐具体书籍/课程/网站（KG可能没有这些数据）
+4. 禁止捏造知识点间的依赖关系 — 前置依赖必须来自KG的edges数据
 
 ## 规划要求（必须完整输出以下5个部分，缺一不可）
 
@@ -79,10 +86,65 @@ PATH_PROMPT = """你是一个学习路径规划专家，风格对标 Coursera �
 
 ---
 
+## 画像缺失处理（系统内部指令，不要输出给用户）
+
+当知识基础、学习目标、每周投入中**任一项为空或"未填写"时**，你必须做到：
+
+1. **绝对不能给出空泛建议** — 禁止输出"先巩固基础""逐步学进阶""通过练习巩固"等无具体知识点的空话
+2. **必须诚实告知数据不足** — 用1句话说清缺少什么信息，例如"我还不太了解你的编程基础和目标，方便说一下吗？"
+3. **基于KG数据给出初步建议** — 即使画像为空，KG拓扑排序结果仍然可用。基于KG输出一个**具体的最小路径**（至少展示阶段1的3个具体知识点名称+预计时间）
+4. **禁止假装知道学生水平** — 禁止说"你有一定基础""你已掌握XXX"，因为你不知道
+
+示例（画像全空但有KG数据）：
+```
+我还不太了解你的编程基础和每周可投入时间。基于Python知识图谱，我为你规划了一个通用的入门路径作为参考：
+
+| 阶段 | 主题 | 核心知识点 | 建议时长 | 前置依赖 | 检验标准 |
+|------|------|-----------|---------|---------|---------|
+| 1 | Python基础语法 | 变量与数据类型、条件判断、循环 | 9h (约2周) | 无 | 用循环+条件写一个猜数字游戏 |
+| 2 | 函数与模块 | 函数定义/参数/返回值、模块导入 | 9h (约2周) | 阶段1 | 用函数重构阶段1的猜数字游戏 |
+| ... |
+
+> 要给你生成更精准的个人化路径吗？只需要告诉我你每周能学多久、目标是什么就行。
+```
+
 **主动引导（用 > 引用格式，只加1句）**：
 - 用户准备开始时：> 规划好了！要从第1阶段「XXX」开始吗？我现在就可以带你学第一个知识点。
 - 计划较长时：> 这个计划总计 X 周。想先试一周看看节奏是否合适吗？
-- 用户可能想调整时：> 觉得哪个阶段难度或时间需要调整？我可以实时修改。"""
+- 画像缺失时：> 告诉我你的编程基础和每周学习时间，我可以给你更精准的规划。
+- 用户可能想调整时：> 觉得哪个阶段难度或时间需要调整？我可以实时修改。
+
+---
+
+## 示例（标准规划报告模板）
+以下是一个合格的 path_agent 回复示例（假设画像已填写，KG有数据）：
+
+我已经根据你的知识基础和Python知识图谱，规划了以下学习路径：
+
+### 1. 当前水平诊断
+已掌握：变量与数据类型, 条件判断, 循环(p>0.85)。技能缺口：缺少函数抽象能力，未接触面向对象编程。当前Python基础掌握率约35%，距入门水平还差7个核心知识点。
+
+### 2. 分阶段学习路线
+
+| 阶段 | 主题 | 核心知识点 | 建议时长 | 前置依赖 | 检验标准 |
+|------|------|-----------|---------|---------|---------|
+| 1 | Python函数 | 函数定义, 参数传递(位置/关键字/默认值), 返回值, 作用域 | 9h (约2周) | 循环, 条件判断 | 用函数重构之前的猜数字游戏，代码>=50行 |
+| 2 | 数据结构 | 列表操作, 字典, 元组, 集合 | 12h (约3周) | 函数, 循环 | 完成LeetCode #1, #26, #88，正确率>=80% |
+| 3 | 面向对象 | 类与对象, 继承, 多态, 封装 | 9h (约2周) | 函数, 数据结构 | 实现学生管理系统(CRUD)，代码>=120行 |
+
+### 3. 时间估算
+基于每周5小时投入：总工时30h，约6-7周完成。时间弹性±2周，预留复习消化时间。
+
+### 4. 复习节点
+- 阶段1学完第1天复习函数参数概念 | 第3天复习作用域规则 | 第7天综合复习函数章节
+- 阶段2学完第1天复习列表字典操作 | 第3天复习集合操作 | 第7天综合复习数据结构
+
+### 5. 里程碑与检验
+- 阶段1: 完成HackerRank Python函数模块5题，正确率>=80%
+- 阶段2: 完成LeetCode #1, #26, #88全部3题
+- 阶段3: 用面向对象实现学生管理系统(CRUD)，包含至少3个类
+
+> 规划好了！要从第1阶段「Python函数」开始吗？我现在就可以带你学第一个知识点。"""
 
 
 def _compute_review_schedule_for_path(
@@ -177,7 +239,7 @@ def _select_domain_files(topic: str) -> list[str]:
         # Java
         (["java", "jvm", "spring", "maven", "gradle", "android"], "kg_java.json"),
         # Go
-        (["go", "golang", "go语言", "goroutine", "channel"], "kg_go.json"),
+        (["golang", "go语言", "goroutine", "channel"], "kg_go.json"),
         # Frontend
         (["前端", "html", "css", "javascript", "js", "vue", "react", "typescript", "ts", "web"], "kg_frontend.json"),
         # ML/AI
@@ -187,7 +249,7 @@ def _select_domain_files(topic: str) -> list[str]:
         # Network
         (["网络", "tcp", "http", "ip", "dns", "协议", "socket", "路由", "交换机"], "kg_network.json"),
         # Database
-        (["数据库", "sql", "mysql", "redis", "mongodb", "索引", "事务", "acid", "nosql"], "kg_database.json"),
+        (["数据库", "sql", "mysql", "redis", "mongodb", "mongo", "索引", "事务", "acid", "nosql"], "kg_database.json"),
         # System/OS
         (["操作系统", "os", "系统", "编译", "进程", "线程", "内存", "cache", "cpu", "汇编", "指令"], "kg_system.json"),
         # Math (maps to algorithm's foundation)
@@ -335,7 +397,8 @@ def _build_dag_stages(topo_order: list[str], known_concepts: set[str], weekly_ho
 def _compute_review_schedule(stages: list[dict]) -> list[dict]:
     """为每个阶段计算艾宾浩斯遗忘曲线复习时间表 (1/3/7/14/30天)"""
     from datetime import datetime, timedelta
-    intervals = [1, 3, 7, 14, 30]
+    from app.services.review_scheduler import INTERVALS as _RS_INTERVALS
+    intervals = _RS_INTERVALS[:5]  # align with review_scheduler
     schedule = []
     today = datetime.now()
     cumulative_days = 0
@@ -359,6 +422,66 @@ def _compute_review_schedule(stages: list[dict]) -> list[dict]:
 # 教学模式辅助函数
 # ═══════════════════════════════════════════════════════════════
 
+def _reorder_by_profile(path: list[str], profile: dict) -> list[str]:
+    """根据画像偏好在同阶段内重排节点顺序（不破坏拓扑序）
+
+    - 视觉型: 优先有"图/可视化/界面/UI"关键词的节点
+    - 动手型: 优先有"编程/代码/项目/实现"关键词的节点
+    - exam目标: 优先基础知识/核心概念节点
+    - career目标: 优先实践/项目/框架节点
+    - 时间少(<10h/周): 核心节点优先，边缘节点后置
+    """
+    if len(path) <= 1:
+        return path
+
+    style = str(profile.get("cognitive_style", "")).lower()
+    goal = str(profile.get("learning_goal", "")).lower()
+    hours = float(profile.get("weekly_hours") or 0)
+
+    def _node_weight(node: str) -> float:
+        w = 0.0
+        nl = node.lower()
+        # 认知风格权重
+        if "visual" in style or "视觉" in style:
+            if any(k in nl for k in ["图", "可视化", "界面", "ui", "视图", "渲染", "布局"]):
+                w += 2.0
+        if "kinesthetic" in style or "动手" in style:
+            if any(k in nl for k in ["编程", "代码", "项目", "实现", "实战", "操作", "练习"]):
+                w += 2.0
+        if "reading" in style or "阅读" in style:
+            if any(k in nl for k in ["原理", "概念", "理论", "基础", "概述", "结构"]):
+                w += 1.5
+        # 学习目标权重
+        if "exam" in goal or "考试" in goal:
+            if any(k in nl for k in ["基础", "核心", "概念", "原理", "算法", "数据结构"]):
+                w += 1.5
+        elif "career" in goal or "工作" in goal or "求职" in goal:
+            if any(k in nl for k in ["项目", "实战", "框架", "应用", "面试", "设计模式"]):
+                w += 1.5
+        # 时间约束权重 (时间少→核心节点优先)
+        if hours > 0 and hours < 10:
+            if any(k in nl for k in ["基础", "核心", "概述", "入门"]):
+                w += 1.0
+            if any(k in nl for k in ["进阶", "高级", "优化", "扩展", "原理"]):
+                w -= 0.5
+        return w
+
+    # 保持拓扑序的前提下，按权重降序排列
+    scored = [(i, node, _node_weight(node)) for i, node in enumerate(path)]
+    result = list(path)
+    # 仅对相邻且同权重段内交换（不跨段交换，保持拓扑安全）
+    i = 0
+    while i < len(result) - 1:
+        wi = _node_weight(result[i])
+        wj = _node_weight(result[i + 1])
+        if wj > wi + 1.0:  # 后续节点权重显著更高 → 前移
+            result[i], result[i + 1] = result[i + 1], result[i]
+            i = max(0, i - 1)
+        else:
+            i += 1
+    return result
+
+
 def _teaching_init(state: dict, topic: str) -> dict:
     """初始化教学流程: KG拓扑排序 → 构建 active_path → 返回首节点"""
     kg = get_graph()
@@ -373,6 +496,9 @@ def _teaching_init(state: dict, topic: str) -> dict:
         active_path: list[str] = []
         for phase in phases:
             active_path.extend(phase)
+        # v5: 根据画像偏好重排同阶段内节点顺序
+        profile = state.get("user_profile") or {}
+        active_path = _reorder_by_profile(active_path, profile)
         logger.info("PathAgent(teaching): KG拓扑完成 phases=%d nodes=%d known=%d",
                      len(phases), len(active_path), len(known))
     else:
@@ -447,18 +573,68 @@ def _teaching_init(state: dict, topic: str) -> dict:
 
 
 def _teaching_advance(state: dict, tc: dict) -> dict:
-    """教学流程推进: current_index+1 → 返回下一节点 或 完成"""
+    """教学流程推进: current_index+1 → 返回下一节点 或 完成
+
+    Issue 2 Fix: 增加防御性校验，防止教学流程卡在同一节点。
+    - 校验 active_path 非空
+    - 校验 next_index 严格大于 current_index
+    - 校验下一节点与当前节点不同（防重复教学）
+    """
     active_path: list = tc.get("active_path", [])
     current_index: int = tc.get("current_index", 0)
     completed_nodes: list = tc.get("completed_nodes", [])
 
+    # 防御: 空路径 → 拒绝推进
+    if not active_path:
+        logger.warning("PathAgent(teaching): active_path 为空，无法推进教学")
+        return {
+            "current_agent": "path_agent",
+            "teaching_context": tc,
+            "stream_buffer": "",
+            "agent_outputs": {
+                **state.get("agent_outputs", {}),
+                "path_agent": {"teaching_stage": "error", "reason": "empty_path"},
+            },
+        }
+
+    # 防御: 索引越界 → 全部完成
+    if current_index >= len(active_path):
+        logger.info("PathAgent(teaching): current_index=%d 已超过路径长度=%d → 标记完成",
+                     current_index, len(active_path))
+        tc["mode"] = "completed"
+        tc["completed_nodes"] = completed_nodes
+        tc["current_index"] = len(active_path)
+        return {
+            "current_agent": "path_agent",
+            "teaching_context": tc,
+            "stream_buffer": "## 学习路径已完成\n\n所有节点已学完。来评估一下学习效果吧！",
+            "agent_outputs": {
+                **state.get("agent_outputs", {}),
+                "path_agent": {
+                    "teaching_stage": "completed",
+                    "completed_nodes": completed_nodes,
+                    "total_nodes": len(active_path),
+                    "topic": tc.get("topic", ""),
+                },
+            },
+        }
+
     # 标记当前节点为已完成
-    if 0 <= current_index < len(active_path):
-        current_node = active_path[current_index]
-        if current_node not in completed_nodes:
-            completed_nodes.append(current_node)
+    current_node = active_path[current_index]
+    if current_node not in completed_nodes:
+        completed_nodes.append(current_node)
+        logger.info("PathAgent(teaching): 标记完成 node='%s' (%d/%d)",
+                     current_node, len(completed_nodes), len(active_path))
+    else:
+        logger.info("PathAgent(teaching): node='%s' 已在 completed_nodes 中，跳过重复标记", current_node)
 
     next_index = current_index + 1
+
+    # 防御: next_index 必须严格大于 current_index
+    if next_index <= current_index:
+        logger.error("PathAgent(teaching): BUG — next_index=%d <= current_index=%d，强制纠正",
+                      next_index, current_index)
+        next_index = current_index + 1
 
     if next_index >= len(active_path):
         # ── 全部完成 ──
@@ -498,6 +674,23 @@ def _teaching_advance(state: dict, tc: dict) -> dict:
 
     # ── 推进到下一节点 ──
     next_node = active_path[next_index]
+
+    # Issue 2 Fix: 防御性检查 — 下一节点必须与当前节点不同
+    if next_node == current_node and current_index != next_index:
+        logger.warning("PathAgent(teaching): 下一节点与当前节点相同 '%s' → 可能是路径数据重复，跳过并继续推进",
+                       next_node)
+        # 强制跳过重复节点，继续向前推进
+        tc["current_index"] = next_index
+        tc["completed_nodes"] = completed_nodes
+        # 递归尝试再推进一次（最多递归一层，防止无限循环）
+        if next_index + 1 < len(active_path):
+            next_next = active_path[next_index + 1]
+            if next_next != next_node:
+                tc["current_index"] = next_index + 1
+                next_node = next_next
+                next_index = next_index + 1
+                logger.info("PathAgent(teaching): 跳过重复节点 → 实际推进到 '%s' (index=%d)", next_node, next_index)
+
     tc["current_index"] = next_index
     tc["completed_nodes"] = completed_nodes
 
@@ -535,13 +728,138 @@ def _teaching_advance(state: dict, tc: dict) -> dict:
     }
 
 
+def replan_remaining_path(state: dict) -> dict | None:
+    """动态重规划：BKT状态变化后，重新计算剩余路径的拓扑排序
+
+    当学生通过教学/练习掌握了新概念后，原本被前置依赖锁定的节点可能解锁。
+    此函数重新运行拓扑排序，更新 teaching_context 中的 active_path。
+
+    Returns:
+        更新后的 teaching_context (dict) 或 None（路径无变化）
+    """
+    tc = state.get("teaching_context") or {}
+    if tc.get("mode") != "teaching":
+        return None
+
+    active_path: list[str] = tc.get("active_path", [])
+    completed_nodes: list[str] = tc.get("completed_nodes", [])
+    current_index: int = tc.get("current_index", 0)
+
+    if not active_path or current_index >= len(active_path):
+        return None
+
+    user_id = state.get("user_id", 0)
+    if not user_id:
+        return None
+
+    # 获取最新 BKT 掌握状态
+    tracker = get_tracker(user_id)
+    known = set(tracker.get_mastered())
+
+    # 标记已完成的节点为"已知"
+    known.update(completed_nodes)
+
+    # 重新加载 KG 并运行拓扑排序
+    kg = get_graph()
+    if not kg.nodes:
+        try:
+            _load_multidiscipline_kg(kg, topic=tc.get("topic", ""))
+        except Exception:
+            pass
+
+    if not kg.nodes:
+        return None
+
+    # 重跑拓扑排序
+    new_phases = kg.topological_sort(known)
+    new_path: list[str] = []
+    for phase in new_phases:
+        new_path.extend(phase)
+
+    # 保持已完成节点在路径头部
+    remaining_new = [n for n in new_path if n not in completed_nodes]
+    remaining_old = active_path[current_index:]
+
+    # 检查路径是否有实际变化
+    new_unlocked = [n for n in remaining_new if n not in remaining_old]
+    removed = [n for n in remaining_old if n not in remaining_new]
+
+    if not new_unlocked and not removed:
+        logger.debug("PathAgent(replan): 路径无变化")
+        return None
+
+    # 构建新路径：已完成 + 新排序的剩余节点
+    updated_path = completed_nodes + remaining_new
+
+    tc["active_path"] = updated_path
+    tc["current_index"] = len(completed_nodes)  # 指向第一个未完成节点
+    tc["_replanned"] = True
+    tc["_new_unlocked"] = new_unlocked
+    tc["_removed"] = removed  # 因为已掌握而跳过的节点
+
+    logger.info(
+        "PathAgent(replan): 路径重规划完成 — 新解锁=%s, 跳过=%s, 剩余=%d节点",
+        new_unlocked, removed, len(remaining_new),
+    )
+
+    return tc
+
+
 def path_agent_node(state: AgentState, spark: SparkClient) -> dict:
     """Path Agent 主节点: BKT状态收集 → KG拓扑排序 → DAG阶段构建 → 复习调度"""
     state = dict(state)  # TypedDict → dict
 
     profile = state.get("user_profile") or {}
     context = state.get("context", {})
-    topic = context.get("topic", state["messages"][-1].content if state["messages"] else "构建学习计划")
+    # 兼容 BaseMessage / dict 两种格式（LangGraph checkpoint 恢复后 messages 可能为 dict）
+    last_msg = ""
+    if state.get("messages"):
+        _last = state["messages"][-1]
+        last_msg = _last["content"] if isinstance(_last, dict) else getattr(_last, "content", "")
+    topic = context.get("topic", last_msg or "构建学习计划")
+
+    # ═══════════════════════════════════════════════════════════════
+    # 动态重规划入口: BKT变化触发路径重算
+    # ═══════════════════════════════════════════════════════════════
+    if context.get("replan_path"):
+        updated_tc = replan_remaining_path(state)
+        if updated_tc:
+            next_node = updated_tc["active_path"][updated_tc["current_index"]] \
+                if updated_tc["current_index"] < len(updated_tc["active_path"]) else ""
+            new_unlocked = updated_tc.get("_new_unlocked", [])
+            removed = updated_tc.get("_removed", [])
+
+            msg_parts = ["学习路径已自动更新："]
+            if removed:
+                msg_parts.append(f"- 已掌握，跳过：{'、'.join(removed)}")
+            if new_unlocked:
+                msg_parts.append(f"- 新解锁：{'、'.join(new_unlocked)}")
+            if next_node:
+                msg_parts.append(f"- 下一节点：{next_node}")
+
+            return {
+                "current_agent": "path_agent",
+                "teaching_context": updated_tc,
+                "stream_buffer": "\n".join(msg_parts),
+                "agent_outputs": {
+                    **state.get("agent_outputs", {}),
+                    "path_agent": {
+                        "teaching_stage": "replanned",
+                        "current_node": next_node,
+                        "current_index": updated_tc["current_index"],
+                        "total_nodes": len(updated_tc["active_path"]),
+                        "completed_nodes": updated_tc.get("completed_nodes", []),
+                        "new_unlocked": new_unlocked,
+                        "skipped": removed,
+                    },
+                },
+            }
+        # 无变化 → 静默跳过
+        return {
+            "current_agent": "path_agent",
+            "stream_buffer": "",
+            "agent_outputs": {**state.get("agent_outputs", {}), "path_agent": {"teaching_stage": "no_change"}},
+        }
 
     # ═══════════════════════════════════════════════════════════════
     # 教学模式入口: teaching_continue 或 init_teaching
@@ -709,7 +1027,7 @@ def path_agent_node(state: AgentState, spark: SparkClient) -> dict:
     messages = None
     # 准备公共变量：对话历史和用户消息，供两种路径使用
     all_msgs = state.get("messages", [])
-    last_user_msg = state["messages"][-1].content if state["messages"] else topic
+    last_user_msg = last_msg_content(state.get("messages", []), default=topic)
     topic_ctx = context.get("topic_context", {})
 
     if kg_path_text:

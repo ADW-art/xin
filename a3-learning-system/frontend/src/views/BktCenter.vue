@@ -29,6 +29,22 @@
       <el-button type="primary" @click="loadBktData">重新加载</el-button>
     </div>
 
+    <!-- Empty state (no mastery data, no error) -->
+    <div v-else-if="masteryList.length === 0" class="bkt-empty">
+      <svg viewBox="0 0 200 130" class="empty-svg" xmlns="http://www.w3.org/2000/svg">
+        <rect x="20" y="15" width="70" height="10" rx="5" fill="rgba(37,99,235,.12)"/>
+        <rect x="25" y="30" width="55" height="4" rx="2" fill="rgba(37,99,235,.08)"/>
+        <circle cx="140" cy="45" r="28" fill="rgba(37,99,235,.04)" stroke="rgba(37,99,235,.15)" stroke-width="2"/>
+        <path d="M128 38l10-10M152 38l-10-10M140 28l2-14M140 62l-2 14" stroke="rgba(37,99,235,.25)" stroke-width="1.5" stroke-linecap="round"/>
+        <rect x="110" y="88" width="80" height="8" rx="4" fill="rgba(37,99,235,.08)"/>
+        <rect x="120" y="100" width="60" height="4" rx="2" fill="rgba(37,99,235,.05)"/>
+      </svg>
+      <p>暂无BKT数据，开始学习后将自动计算</p>
+      <el-button type="primary" @click="$router.push('/chat')">
+        <el-icon><Connection /></el-icon> 开始学习
+      </el-button>
+    </div>
+
     <!-- Main Body -->
     <div v-else class="bkt-body">
       <!-- Stats Row (compact) -->
@@ -207,9 +223,11 @@
             </div>
             <div v-if="demoStepDetail" class="demo-detail">
               <table class="dt-table">
-                <tr><td>贝叶斯后验</td><td>{{ demoStepDetail.bayes_numerator }} / {{ demoStepDetail.bayes_denominator }}</td><td>= <strong>{{ (demoStepDetail.p_after_bayes * 100).toFixed(1) }}%</strong></td></tr>
-                <tr><td>+ 学习转移</td><td>(1-P) × T</td><td>= +{{ (demoStepDetail.learn_delta * 100).toFixed(1) }}%</td></tr>
-                <tr><td colspan="3" class="dt-final">最终 = <strong>{{ (demoStepDetail.p_final * 100).toFixed(1) }}%</strong></td></tr>
+                <tbody>
+                  <tr><td>贝叶斯后验</td><td>{{ demoStepDetail.bayes_numerator }} / {{ demoStepDetail.bayes_denominator }}</td><td>= <strong>{{ (demoStepDetail.p_after_bayes * 100).toFixed(1) }}%</strong></td></tr>
+                  <tr><td>+ 学习转移</td><td>(1-P) × T</td><td>= +{{ (demoStepDetail.learn_delta * 100).toFixed(1) }}%</td></tr>
+                  <tr><td colspan="3" class="dt-final">最终 = <strong>{{ (demoStepDetail.p_final * 100).toFixed(1) }}%</strong></td></tr>
+                </tbody>
               </table>
             </div>
           </div>
@@ -222,7 +240,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Loading, WarningFilled } from '@element-plus/icons-vue'
+import { Loading, WarningFilled, Connection } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import api from '@/api/index'
 
@@ -476,9 +494,8 @@ async function loadBktData() {
           })).sort((a, b) => b.pKnown - a.pKnown)
         }
       } catch { /* ignore */ }
-      if (masteryList.value.length === 0) {
-        error.value = '暂无知识点数据，请先完成学习路径或答题'
-      }
+      // masteryList may be empty but that's valid — template shows empty state
+      // error remains '' so the empty UI branch renders instead of the error branch
     }
 
     if (masteryList.value.length > 0 && !selectedConcept.value) selectedConcept.value = masteryList.value[0]
@@ -626,6 +643,7 @@ onMounted(loadBktData)
 .spin { animation: spin 1.2s linear infinite }
 @keyframes spin { to { transform: rotate(360deg) } }
 .bkt-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: #94A3B8 }
+.empty-svg { width: 180px; height: 120px; margin-bottom: 8px; opacity: .55 }
 
 /* Responsive */
 @media (max-width: 1100px) {
@@ -635,5 +653,47 @@ onMounted(loadBktData)
 @media (max-width: 900px) {
   .bkt-left { display: none }
   .chart-area { height: 260px }
+  .bkt-bar { flex-direction: column; gap: 8px; padding: 14px 16px 10px; }
+  .bkt-bar-r { flex-wrap: wrap; gap: 6px; }
+  .bkt-stats { padding: 8px 16px; gap: 0; }
+  .bs-v { font-size: 15px; }
+  .bkt-body { padding: 12px 16px 16px; }
+}
+@media (max-width: 768px) {
+  .bkt-bar-l h1 { font-size: 18px; }
+  .bkt-bar-l p { font-size: 11px; }
+  .bkt-main { flex-direction: column; gap: 12px; }
+  .bkt-left { display: block; width: 100%; max-height: 300px; }
+  .bkt-right { width: 100%; }
+  .chart-area { height: 240px; }
+  .params-grid { grid-template-columns: 1fr 1fr; gap: 6px; }
+  .demo-body { gap: 10px; }
+  .demo-val { font-size: 22px; }
+  .demo-mid { padding-top: 16px; gap: 4px; }
+  .btn-ok, .btn-ng { padding: 6px 14px; font-size: 12px; }
+}
+@media (max-width: 480px) {
+  .bkt-bar { padding: 10px 12px 8px; }
+  .bkt-bar-l h1 { font-size: 16px; }
+  .bkt-stats { padding: 6px 12px; flex-wrap: wrap; }
+  .bs-item { flex: 0 0 auto; min-width: 20%; }
+  .bs-v { font-size: 14px; }
+  .bs-l { font-size: 9px; }
+  .bkt-body { padding: 8px 12px 12px; }
+  .bkt-left { max-height: 260px; }
+  .bc-hd { padding: 10px 12px; font-size: 12px; }
+  .bc-bd { padding: 8px 12px; }
+  .chart-area { height: 200px; }
+  .params-grid { grid-template-columns: 1fr 1fr; gap: 4px; }
+  .pp-cell { padding: 8px 6px; }
+  .pp-v { font-size: 15px; }
+  .demo-body { flex-direction: column; align-items: center; gap: 6px; }
+  .demo-col { width: 100%; }
+  .demo-val { font-size: 20px; }
+  .card-formula .f-row { grid-template-columns: 1fr; }
+  .formula-body { font-size: 10px; }
+  .f-note { font-size: 9px; }
+  .cr-name { font-size: 11px; }
+  .cr-pct { font-size: 12px; }
 }
 </style>

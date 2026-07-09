@@ -14,6 +14,7 @@ import logging
 import re
 
 from app.agents.state import AgentState
+from app.agents._msg_compat import last_msg_content  # 兼容 checkpoint 恢复后 dict 格式
 from app.services.rag_service import retrieve_context, hybrid_search
 from app.services.spark_client import SparkClient
 
@@ -26,7 +27,7 @@ TYPE_LABELS = {
     "question_set": "练习题",
     "code_example": "代码案例",
     "video_script": "讲解脚本",
-    "comparison": "对比分析",
+    "reading_material": "扩展阅读",
 }
 #核心prompt模板
 RESOURCE_PROMPT = """你是一个个性化学习资源生成专家，风格对标 Khan Academy + LeetCode 官方题解。
@@ -159,7 +160,85 @@ graph TD
 6. ### 下一步 — 推荐1个具体下一步知识点+原因
 
 每个部分都必须使用 ### 标题，代码块使用 ```语言 标记。
-**少任何一部分，这份输出就是废品。**"""
+**少任何一部分，这份输出就是废品。**
+
+## 示例（标准回答模板）
+以下是一个合格的 resource_agent 回复示例：
+
+### 概述
+装饰器让你在不修改原函数的情况下给函数添加额外行为。
+
+### 核心概念
+**语法糖 @**: 将装饰器函数放在被装饰函数定义前一行
+```python
+def timer(func):
+    import time
+    def wrapper(*args, **kwargs):
+        start = time.time()
+        result = func(*args, **kwargs)
+        print(f"{{func.__name__}} 耗时 {{time.time()-start:.2f}}s")
+        return result
+    return wrapper
+
+@timer
+def slow_add(a, b):
+    import time; time.sleep(0.1)
+    return a + b
+```
+```
+slow_add 耗时 0.10s
+```
+@timer 把 slow_add 传入 timer，返回 wrapper 替换了原函数。调用 slow_add 实际执行 wrapper。
+
+### 代码实战
+```python
+# 综合示例：装饰器实现 API 限流
+import time
+from functools import wraps
+
+def rate_limit(max_calls, period):
+    def decorator(func):
+        calls = []
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            now = time.time()
+            calls[:] = [c for c in calls if now - c < period]
+            if len(calls) >= max_calls:
+                raise RuntimeError(f"超过限制: {{max_calls}}次/{{period}}秒")
+            calls.append(now)
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+@rate_limit(max_calls=3, period=5)
+def fetch_data(url):
+    import requests
+    return requests.get(url).status_code
+```
+
+### 常见陷阱
+**陷阱1: 忘记 @wraps 会丢失元信息**
+```python
+# 错误: 装饰后函数名变成 wrapper
+def bad_decorator(func):
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+@bad_decorator
+def greet(): pass
+print(greet.__name__)  # 输出 wrapper 而不是 greet
+```
+**修复**: from functools import wraps 并在 wrapper 上加 @wraps(func)
+
+### 练习
+**题目1** (中等, 考察: 装饰器, 闭包)
+写一个 @retry(max_attempts=3) 装饰器，函数抛出异常时自动重试，最多3次。
+
+**题目2** (简单, 考察: 装饰器参数)
+写一个 @log_calls 装饰器，每次函数调用时打印函数名和参数。
+
+### 下一步
+> 装饰器掌握后，可以学习带参数的装饰器和类装饰器，需要我接着讲吗？"""
 
 TYPE_GUIDES = {
     "document": """生成一份完整的教程文档，必须严格包含以下6个部分：
@@ -255,6 +334,18 @@ TYPE_GUIDES = {
 - 有代码无输出结果
 - 代码不能直接运行（缺少 import、变量未定义等）""",
 
+    "reading_material": """输出格式严格遵循如下结构：
+1. 推荐主题与学习理由（与本主题和用户画像的关联）
+2. 3-5篇推荐阅读（书名/文章名 + 作者 + 推荐原因 + 难度）
+3. 阅读顺序建议
+4. 延伸方向和关键词
+
+注意：
+- 只能推荐真实存在的书籍、论文和技术文档（如Python官方文档、算法导论、CSAPP等知名教材）
+- 严禁编造不存在的参考资料
+- 必须说明每项推荐与当前学习主题的关联性
+- 难度标注：入门/中等/进阶
+""",
     "video_script": """生成「互动式教程」—— 对标 Khan Academy 视频讲解风格的结构化教程。
 
 ## 教程格式（三步递进，必须完整）
@@ -362,7 +453,7 @@ def resource_agent_node(state: AgentState, spark: SparkClient) -> dict:
     state = dict(state)  # TypedDict → dict
     profile = state.get("user_profile") or {}
     context = state.get("context", {})
-    topic = context.get("topic", state["messages"][-1].content if state["messages"] else "")
+    topic = context.get("topic", last_msg_content(state.get("messages", [])))
 
     # 教学流程感知：获取当前节点和下一节点信息
     teaching_context = state.get("teaching_context") or {}
@@ -403,6 +494,7 @@ def resource_agent_node(state: AgentState, spark: SparkClient) -> dict:
     # RAG 检索：从知识库中查找与当前主题相关的教材片段
     # BGE 未就绪时跳过 RAG，直接 LLM 生成（避免首次请求超时）
     references = ""
+    rag_degraded = False
     from app.services.rag_service import is_rag_ready
     if is_rag_ready():
         try:
@@ -412,6 +504,7 @@ def resource_agent_node(state: AgentState, spark: SparkClient) -> dict:
         except Exception as e:
             logger.warning("ResourceAgent: RAG 检索失败: %s", e)
     else:
+        rag_degraded = True
         logger.info("ResourceAgent: BGE 未就绪，跳过 RAG 检索 (纯 LLM 生成)")
 
     # Content Store 降级：轻量教材库作为备选知识注入（不依赖 BGE 模型）
@@ -437,9 +530,11 @@ def resource_agent_node(state: AgentState, spark: SparkClient) -> dict:
     resource_type = pref_map.get(pref, "document")
 
     # 用户显式资源类型请求覆盖画像偏好
-    user_msg = state["messages"][-1].content if state["messages"] else ""
+    user_msg = last_msg_content(state.get("messages", []))
     override_map = {
         "思维导图": "mindmap", "脑图": "mindmap", "导图": "mindmap", "mindmap": "mindmap",
+        "图解": "mindmap", "画图": "mindmap", "图示": "mindmap", "图说明": "mindmap",
+        "画一个图": "mindmap", "画张图": "mindmap", "图解释": "mindmap", "diagram": "mindmap",
         "代码": "code_example", "编程": "code_example", "code": "code_example",
         "题目": "question_set", "题": "question_set", "练习": "question_set", "考题": "question_set",
         "视频": "document", "脚本": "document", "讲解视频": "document",
@@ -553,7 +648,7 @@ def resource_agent_node(state: AgentState, spark: SparkClient) -> dict:
     # 携带对话历史上下文，确保多轮对话中代词语义连贯、约束条件跨轮传递
     from app.core.shared_utils import _build_llm_messages
     all_msgs = state.get("messages", [])
-    last_user_msg = state["messages"][-1].content if state["messages"] else topic
+    last_user_msg = last_msg_content(state.get("messages", []), default=topic)
     messages = _build_llm_messages(
         resource_system,
         all_msgs,
@@ -569,6 +664,7 @@ def resource_agent_node(state: AgentState, spark: SparkClient) -> dict:
         "type": resource_type,
         "topic": topic,
         "title": clean_title,
+        "rag_degraded": rag_degraded,  # 知识库未就绪时标记，前端/chat.py 据此提示用户
         "stream_pending": {
             "messages": messages,
             "temperature": 0.7,

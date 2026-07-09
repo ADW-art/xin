@@ -21,7 +21,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { login as loginApi, register as registerApi, getMe, type UserInfo } from '@/api/auth'
+import { login as loginApi, register as registerApi, getMe, logout as logoutApi, type UserInfo } from '@/api/auth'
 import {
   getProfile as getProfileApi,
   updateProfile as updateProfileApi,
@@ -48,8 +48,13 @@ export const useUserStore = defineStore('user', () => {
     await fetchProfile()
   }
 
-  // 登出：清除 token 和所有状态，跳转到登录页
-  function logout() {
+  // 登出：通知后端拉黑 token，再清除本地状态并跳转登录页
+  async function logout() {
+    try {
+      await logoutApi()   // 后端将当前 token 加入黑名单（尽力而为）
+    } catch {
+      // token 已失效或网络异常，忽略，继续清本地状态
+    }
     token.value = null
     userInfo.value = null
     profile.value = null
@@ -87,7 +92,9 @@ export const useUserStore = defineStore('user', () => {
   // 更新学习画像（部分字段）
   async function updateProfile(data: ProfileUpdateData) {
     try {
-      profile.value = await updateProfileApi(data)
+      const updated = await updateProfileApi(data)
+      profile.value = updated
+      return updated  // 关键: 返回新数据给调用方
     } catch (err) {
       throw err
     }

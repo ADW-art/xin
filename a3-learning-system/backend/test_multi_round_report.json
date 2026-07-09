@@ -1,0 +1,18 @@
+{
+  "timestamp": "2026-06-15T01:48:15.551048",
+  "backend": "http://localhost:8003",
+  "total_tests": 67,
+  "passed": 64,
+  "failed": 3,
+  "warnings": 0,
+  "pass_rate": 95.52238805970148,
+  "grade": "A+ (省一标准)",
+  "elapsed_seconds": 208.5,
+  "rounds": {
+    "Round1-初学者流程": "ok",
+    "Round2-进阶学习": "ok",
+    "Round3-边界异常": "ok",
+    "Round4-跨会话持久化": "ok",
+    "Round5-动态路径演变": "ok"
+  }
+}

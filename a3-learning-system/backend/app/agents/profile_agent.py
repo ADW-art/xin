@@ -12,6 +12,7 @@ import random
 import re
 
 from app.agents.state import AgentState
+from app.agents._msg_compat import last_msg_content  # 兼容 checkpoint 恢复后 dict 格式
 from app.core.database import SessionLocal
 from app.core.shared_utils import _structure_knowledge_base
 from app.models.profile import LearningProfile
@@ -35,6 +36,8 @@ DIMENSION_QUESTIONS = [
     ("cognitive_style", "你更喜欢通过什么方式学习？看视频、读文档、动手做项目、还是听讲解？"),
     ("preferred_resource_type", "你最喜欢哪种学习材料？文档资料、思维导图、代码案例、还是视频教程？"),
     ("error_patterns", "回顾你之前的学习经历，有没有经常混淆或犯错的知识点？"),
+    ("learning_phase", "你觉得自己目前处于哪个阶段？零基础刚入门、有一定基础想提高、还是已经比较熟练想进阶？"),
+    ("interest_direction", "你学习更偏向哪个方向？喜欢研究理论原理、动手做实践项目、还是刷题准备竞赛/面试？"),
 ]
 
 EXTRACT_PROMPT = """你是一个学习画像分析专家。根据用户的回复，提取对应的维度信息，返回 JSON。
@@ -66,11 +69,14 @@ def _save_to_db(user_id: int, profile: dict):
             db.add(row)
         for key, _ in DIMENSION_QUESTIONS:
             if key in profile and profile[key] is not None:
-                setattr(row, key, profile[key])
+                if hasattr(row, key):
+                    setattr(row, key, profile[key])
+                else:
+                    pass  # new dimension: stored in dimension_scores
         kb_raw = profile.get("knowledge_base")
         if kb_raw and isinstance(kb_raw, str):
             row.knowledge_base = _structure_knowledge_base(kb_raw)
-        row.dimension_scores = _compute_dimension_scores(profile)
+        row.dimension_scores = _compute_dimension_scores(profile, user_id)
         db.commit()
         logger.info("ProfileAgent: 画像已存入 MySQL user_id=%d", user_id)
 
@@ -89,37 +95,109 @@ def _save_to_db(user_id: int, profile: dict):
         db.close()
 
 
-def _compute_dimension_scores(profile: dict) -> dict:
+def _compute_dimension_scores(profile: dict, user_id: int = 0) -> dict:
     import re as _re
-    kb_raw = str(profile.get("knowledge_base", "") or "")
-    kb_topics = [t.strip() for t in _re.split(r"[,，、;；/]", kb_raw) if t.strip()]
+    # knowledge_base 可能是 dict（正常保存）或 str（旧数据兼容），统一提取话题列表
+    kb_val = profile.get("knowledge_base", {}) or {}
+    if isinstance(kb_val, dict):
+        kb_topics = list(kb_val.keys())
+        kb_values = list(kb_val.values())
+        try:
+            avg_score = sum(float(v) for v in kb_values) / max(len(kb_values), 1)
+        except (ValueError, TypeError):
+            avg_score = 50  # non-numeric values → default
+    elif isinstance(kb_val, str) and kb_val.strip():
+        kb_topics = [t.strip() for t in _re.split(r"[,，、;；/]", kb_val) if t.strip()]
+        avg_score = 50  # 字符串格式无分数，用中性默认值
+    else:
+        kb_topics = []
+        avg_score = 0
     topic_count = len(kb_topics)
     tech_keywords = ["python", "java", "javascript", "c++", "go", "rust", "sql", "html", "css",
                      "react", "vue", "django", "flask", "spring", "算法", "数据结构", "机器学习",
                      "深度学习", "前端", "后端", "数据库", "linux", "docker"]
     has_tech = any(any(kw in t.lower() for kw in tech_keywords) for t in kb_topics)
-    knowledge_score = min(95, 30 + topic_count * 12 + (25 if has_tech else 0))
+    # knowledge_score: 优先使用 BKT 数据（已掌握率），无数据时回退启发式
+    kb_raw = str(kb_val)
+    try:
+        from app.services.bkt_service import get_tracker as _gt
+        _bt = _gt(user_id)
+        if _bt.nodes:
+            _bd = _bt.to_dict()
+            _mastered = _bd["summary"]["mastered"]
+            _total = _bd["summary"]["total"]
+            knowledge_score = round((_mastered / max(_total, 1)) * 100)
+        else:
+            knowledge_score = min(95, int(avg_score * 0.6 + min(topic_count * 10, 35) + (25 if has_tech else 0)))
+    except Exception:
+        knowledge_score = min(95, int(avg_score * 0.6 + min(topic_count * 10, 35) + (25 if has_tech else 0)))
     if "入门" in kb_raw or "零基础" in kb_raw or "没学过" in kb_raw:
         knowledge_score = min(knowledge_score, 35)
 
     style = str(profile.get("cognitive_style", "") or "").lower()
-    logic_score = 78 if any(w in style for w in ["逻辑","推理","分析","系统"]) else \
-                  58 if any(w in style for w in ["视觉","图像","图表","直观"]) else \
-                  52 if any(w in style for w in ["动手","实践","操作"]) else 62
+    # logic_score: 优先使用 BKT 数据（变异系数），无数据时回退启发式
+    # 提前获取 tracker 以避免在分离的 try/except 块间出现 unbound 变量
+    from app.services.bkt_service import get_tracker
+    tracker = get_tracker(user_id)
+    try:
+        if len(tracker.nodes) >= 2:
+            p_values = [n.p_known for n in tracker.nodes.values()]
+            mean_p = sum(p_values) / len(p_values)
+            variance = sum((p - mean_p) ** 2 for p in p_values) / len(p_values)
+            cv = (variance ** 0.5) / max(mean_p, 0.01)
+            logic_score = round(max(0, min(100, 100 - cv * 200)))
+        else:
+            logic_score = 78 if any(w in style for w in ["逻辑","推理","分析","系统"]) else \
+                          58 if any(w in style for w in ["视觉","图像","图表","直观"]) else \
+                          52 if any(w in style for w in ["动手","实践","操作"]) else 62
+    except Exception:
+        logic_score = 62
 
     hours = float(profile.get("weekly_hours") or 0)
     goal = str(profile.get("learning_goal", "") or "").lower()
-    practice_score = min(90, 25 + int(hours * 7))
+    # practice_score: 优先使用 BKT 答题数据，无数据时回退自报 hours
+    try:
+        total_attempts = sum(n.total_attempts for n in tracker.nodes.values()) if len(tracker.nodes) > 0 else 0
+        total_correct = sum(n.correct_count for n in tracker.nodes.values())
+        if total_attempts > 0:
+            practice_score = min(95, round((total_correct / total_attempts) * 100))
+        else:
+            practice_score = min(90, 25 + int(hours * 7))
+    except Exception:
+        practice_score = min(90, 25 + int(hours * 7))
     if any(w in goal for w in ["项目","实战","工作","求职","面试"]):
-        practice_score = min(95, practice_score + 15)
+        practice_score = min(95, practice_score + 10)
     elif any(w in goal for w in ["兴趣","了解","入门"]):
         practice_score = max(30, practice_score - 10)
 
     pref = str(profile.get("preferred_resource_type", "") or "").lower()
-    speed_score = 72 if pref in ["video","视频"] else 65 if pref in ["code","代码"] else 78 if pref in ["interactive","交互"] else 60
+    # speed_score: use BKT data (mastered/total ratio), fallback to preference heuristic
+    try:
+        if tracker.nodes:
+            _sd_sp = tracker.to_dict()
+            _mst = _sd_sp["summary"]["mastered"]
+            _ttl = _sd_sp["summary"]["total"]
+            speed_score = round((_mst / max(_ttl, 1)) * 100)
+        else:
+            speed_score = 72 if pref in ["video","视频"] else 65 if pref in ["code","代码"] else 78 if pref in ["interactive","交互"] else 60
+    except Exception:
+        speed_score = 72 if pref in ["video","视频"] else 65 if pref in ["code","代码"] else 78 if pref in ["interactive","交互"] else 60
 
     err = str(profile.get("error_patterns", "") or "")
-    focus_score = 75 if (not err or err in ["无","暂无"]) else max(30, 70 - len(_re.split(r"[,，、;；]", err)) * 8)
+    # focus_score: use BKT weak points + answer error rate, fallback to self-reported
+    try:
+        if tracker.nodes:
+            _sd_fs = tracker.to_dict()
+            _wk = _sd_fs["summary"].get("weak_points", [])
+            wk_cnt = len(_wk)
+            _ta_fs = sum(n.total_attempts for n in tracker.nodes.values())
+            _tc_fs = sum(n.correct_count for n in tracker.nodes.values())
+            _er_fs = 1 - (_tc_fs / max(_ta_fs, 1)) if _ta_fs > 0 else 0
+            focus_score = round(max(30, min(100, 100 - wk_cnt * 15 - _er_fs * 50)))
+        else:
+            focus_score = 75 if (not err or err in ["无","暂无"]) else max(30, 70 - len(_re.split(r"[,，、;；]", err)) * 8)
+    except Exception:
+        focus_score = 75 if (not err or err in ["无","暂无"]) else max(30, 70 - len(_re.split(r"[,，、;；]", err)) * 8)
 
     overall_score = round(knowledge_score*0.25 + logic_score*0.18 + practice_score*0.22 + speed_score*0.15 + focus_score*0.20, 1)
 
@@ -182,7 +260,7 @@ def _build_summary(profile: dict) -> str:
 def profile_agent_node(state: AgentState, spark: SparkClient) -> dict:
     state = dict(state)  # TypedDict → dict
     profile = state.get("user_profile") or {}
-    last_msg = state["messages"][-1].content if state["messages"] else ""
+    last_msg = last_msg_content(state.get("messages", []))
     buffered_reply = ""
 
     unfilled = [(k, q) for k, q in DIMENSION_QUESTIONS

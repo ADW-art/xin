@@ -1,0 +1,15 @@
+﻿# plan_result.yaml
+approach: string
+architecture_impact: string
+tasks:
+  - id: int
+    description: string
+    files:
+      - string
+    est_loc: int
+    acceptance: string
+    risk: enum           # HIGH|MEDIUM|LOW
+test_plan:
+  - string
+estimated_effort: string
+fallback: string

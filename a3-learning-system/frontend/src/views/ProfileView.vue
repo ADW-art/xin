@@ -5,6 +5,14 @@
       <span>加载中...</span>
     </div>
 
+    <!-- ═══ Error state ═══ -->
+    <div v-else-if="loadError" class="error-state a-scale">
+      <el-icon :size="40"><WarningFilled /></el-icon>
+      <h3>加载失败</h3>
+      <p>{{ loadError }}</p>
+      <el-button type="primary" @click="loadData">重新加载</el-button>
+    </div>
+
     <template v-else>
       <!-- ═══════════ Profile Header ═══════════ -->
       <div class="profile-header a-slide">
@@ -112,8 +120,19 @@
                 </div>
               </div>
 
-              <div v-else-if="d.key === 'knowledge_base'" class="dim-empty">
-                暂无数据，开始对话学习后自动更新
+              <div v-else-if="d.key === 'knowledge_base'" class="dim-badges">
+                <span
+                  v-for="(level, name) in (profileData.knowledge_base || {})"
+                  :key="String(name)"
+                  class="dim-badge"
+                  :style="{ background: d.bg, color: d.color }"
+                >
+                  {{ name }}
+                  <span class="level-dot" :class="`level-${level}`">{{ levelMap[level] || level }}</span>
+                </span>
+                <span v-if="!profileData.knowledge_base || !Object.keys(profileData.knowledge_base).length" class="dim-empty">
+                  暂无数据，开始对话学习后自动更新
+                </span>
               </div>
 
               <div v-else class="dim-val">{{ displayRawVal(d.key) || '点击编辑填写' }}</div>
@@ -122,23 +141,37 @@
             <!-- Edit mode -->
             <div v-else class="dim-content">
               <div class="dim-name">{{ d.label }}</div>
-              <el-input
-                v-if="isComplexDim(d.key)"
-                v-model="editForm[d.key]"
-                type="textarea"
-                :rows="3"
-                size="small"
-                @blur="finishEdit(d)"
-                @keydown.escape="d.editing = false"
+
+              <!-- 易错模式: 可视化 chip 编辑器 (业内最佳实践: 不让用户写 JSON) -->
+              <ErrorPatternEditor
+                v-if="d.key === 'error_patterns'"
+                :model-value="editForm.error_patterns"
+                field-name="error_patterns"
+                @update:model-value="editForm.error_patterns = $event"
+                @save="finishEdit(d)"
+                @change="() => onFieldChange('error_patterns')"
               />
+
+              <!-- 知识基础: 可视化 chip 编辑器 --><!-- 知识基础: JSON格式编辑 -->
+              <div v-else-if="d.key === 'knowledge_base'" class="dim-kb-edit">
+                <el-input
+                  v-model="editForm.knowledge_base"
+                  type="textarea"
+                  :rows="3"
+                  size="small"
+                  placeholder='JSON格式, 如 {\"Python\":80,\"数学\":60}'
+                  @blur="() => { markDirty(d.key); finishEdit(d) }"
+                />
+                <span class="dim-edit-hint">JSON格式: 知识点名称 → 掌握度(0-100)</span>
+              </div>
+
               <el-input
                 v-else
                 v-model="editForm[d.key]"
                 size="small"
-                @blur="finishEdit(d)"
-                @keydown.enter="finishEdit(d)"
+                @blur="() => { markDirty(d.key); finishEdit(d) }"
+                @keydown.enter="() => { markDirty(d.key); finishEdit(d) }"
               />
-              <p class="dim-edit-hint" v-if="isComplexDim(d.key)">JSON 格式，点击外部区域保存</p>
             </div>
 
             <el-button text class="dim-edit-btn" @click="startEdit(d)">
@@ -153,12 +186,13 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElNotification } from 'element-plus'
 import {
   Reading, View, Flag, Timer, Collection, WarningFilled,
   Loading, Edit, TrendCharts, TrophyBase, MagicStick, Suitcase, Star,
   VideoCamera, Document, Monitor, Connection, Headset, Promotion,
 } from '@element-plus/icons-vue'
+import ErrorPatternEditor from '@/components/ErrorPatternEditor.vue'
 import * as echarts from 'echarts'
 import { useUserStore } from '@/stores/user'
 import type { LearningProfile, ProfileUpdateData } from '@/api/profile'
@@ -190,6 +224,7 @@ const dimensions = reactive<DimDef[]>([
 ])
 
 const loading = ref(true)
+const loadError = ref('')
 const radarRef = ref<HTMLDivElement | null>(null)
 const radarReady = ref(false)
 let chartInstance: echarts.ECharts | null = null
@@ -202,6 +237,20 @@ const editForm = reactive<Record<string, string>>({
   preferred_resource_type: '',
   error_patterns: '',
 })
+
+// 跟踪哪些字段被用户编辑过 (业内最佳实践: 只 PUT 被修改的字段)
+// 用 ref<string[]> 而非 reactive<Set> 是因为 Vue 的 reactive 不支持 Set/Map 泛型
+const dirtyFields = ref<string[]>([])
+
+function markDirty(key: string) {
+  if (!dirtyFields.value.includes(key)) {
+    dirtyFields.value.push(key)
+  }
+}
+
+function isDirty(key: string): boolean {
+  return dirtyFields.value.includes(key)
+}
 
 const profileData = computed<LearningProfile>(() => {
   return userStore.profile ?? {
@@ -321,6 +370,13 @@ const errorTypeMap: Record<string, string> = {
   misunderstanding: '理解偏差',
   application: '应用困难',
 }
+// 知识点熟练度 (业内最佳实践: 用户友好的中文标签)
+const levelMap: Record<string, string> = {
+  beginner: '入门',
+  intermediate: '掌握',
+  advanced: '熟练',
+  expert: '精通',
+}
 
 function isComplexDim(key: string): boolean {
   return key === 'knowledge_base' || key === 'error_patterns'
@@ -348,14 +404,16 @@ function displayRawVal(key: string): string {
 
 async function loadData() {
   loading.value = true
+  loadError.value = ''
   try {
     await Promise.all([
       userStore.fetchUserInfo(),
       userStore.fetchProfile(),
     ])
     syncEditForm()
-  } catch {
-    ElMessage.warning('加载失败，请检查网络连接')
+  } catch (e: unknown) {
+    const err = e as { response?: { data?: { detail?: string } }; message?: string }
+    loadError.value = err?.response?.data?.detail || err?.message || '加载失败，请检查网络连接'
   } finally {
     loading.value = false
     await nextTick()
@@ -378,31 +436,94 @@ function syncEditForm() {
 const saving = ref(false)
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 
-async function save() {
-  // 300ms debounce: 连续触发只执行最后一次
+/**
+ * 业内最佳实践 (参考 Notion / Linear / Anki):
+ *   - 用户每次操作触发 @change 事件
+ *   - 1.5s 内无新操作 → 自动写入后端 (auto-save)
+ *   - 比"必须点保存按钮"更符合用户预期，避免数据丢失
+ */
+function autoSaveDebounced() {
   if (saveTimer) clearTimeout(saveTimer)
-  saveTimer = setTimeout(async () => {
-    const body: ProfileUpdateData = {}
-    for (const dim of dimensions) {
-      const raw = editForm[dim.key]
-      if (!raw) continue
-      try {
-        ;(body as Record<string, unknown>)[dim.key] = JSON.parse(raw)
-      } catch {
-        ;(body as Record<string, unknown>)[dim.key] = raw
+  saveTimer = setTimeout(save, 1500)
+}
+
+// 字段被改动时调用 (子组件 @change 触发)
+function onFieldChange(field: string) {
+  markDirty(field)
+  autoSaveDebounced()
+}
+
+async function save() {
+  if (saveTimer) {
+    clearTimeout(saveTimer)
+    saveTimer = null
+  }
+  // 关键修复: 只发被用户编辑过的字段 (业内最佳实践)
+  if (dirtyFields.value.length === 0) {
+    console.log('[ProfileView] 没有 dirty 字段，跳过保存')
+    return
+  }
+  const body: ProfileUpdateData = {}
+  for (const key of dirtyFields.value) {
+    const raw = editForm[key]
+    if (key === 'error_patterns' || key === 'knowledge_base') {
+      if (raw === '' || raw === undefined) {
+        ;(body as Record<string, unknown>)[key] = null
+        continue
       }
+      try {
+        const parsed = JSON.parse(raw)
+        if (Array.isArray(parsed) && parsed.length === 0) {
+          ;(body as Record<string, unknown>)[key] = null
+        } else if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.keys(parsed).length === 0) {
+          ;(body as Record<string, unknown>)[key] = null
+        } else {
+          ;(body as Record<string, unknown>)[key] = parsed
+        }
+      } catch (e) {
+        console.error('[ProfileView] JSON parse failed for', key, raw, e)
+        ;(body as Record<string, unknown>)[key] = null
+      }
+    } else if (key === 'weekly_hours') {
+      // 数字字段: 转 number 或 null
+      if (raw === '' || raw === undefined || raw === null) {
+        ;(body as Record<string, unknown>)[key] = null
+      } else {
+        const num = Number(raw)
+        ;(body as Record<string, unknown>)[key] = isNaN(num) ? null : num
+      }
+    } else {
+      ;(body as Record<string, unknown>)[key] = raw === '' ? null : raw
     }
-    saving.value = true
-    try {
-      await userStore.updateProfile(body)
-      ElMessage.success('保存成功')
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e)
-      ElMessage.error('保存失败: ' + msg)
-    } finally {
-      saving.value = false
-    }
-  }, 300)
+  }
+  console.log('[ProfileView] auto-saving profile...', body)
+  saving.value = true
+  try {
+    const updated = await userStore.updateProfile(body)
+    console.log('[ProfileView] save success, updated profile:', updated)
+    ElNotification({
+      title: '已保存',
+      message: `更新了 ${Object.keys(body).length} 个字段: ${Object.keys(body).join(', ')}`,
+      type: 'success',
+      duration: 2000,
+      position: 'top-right',
+    })
+    // 重新同步 editForm（确保与后端一致）+ 清空 dirty 标记
+    syncEditForm()
+    dirtyFields.value = []
+  } catch (e: unknown) {
+    const err = e as { response?: { data?: { detail?: string } }; message?: string }
+    const msg = err?.response?.data?.detail || err?.message || String(e)
+    console.error('[ProfileView] save failed:', e)
+    ElNotification({
+      title: '保存失败',
+      message: msg,
+      duration: 5000,
+      position: 'top-right',
+    })
+  } finally {
+    saving.value = false
+  }
 }
 
 function initRadarChart() {
@@ -510,6 +631,30 @@ onUnmounted(() => {
   font-size: var(--font-base);
 }
 .spin { animation: spin 1s linear infinite; }
+
+/* ═══ Error State ═══ */
+.error-state {
+  text-align: center;
+  padding: 80px 0;
+}
+.error-state .el-icon {
+  color: var(--red, #EF4444);
+  margin-bottom: 16px;
+}
+.error-state h3 {
+  font-size: var(--font-xl);
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+.error-state p {
+  font-size: var(--font-sm);
+  color: var(--text-muted);
+  margin-bottom: 20px;
+  max-width: 360px;
+  margin-left: auto;
+  margin-right: auto;
+}
 
 /* ═══════════ Profile Header ═══════════ */
 .profile-header {
@@ -621,4 +766,31 @@ onUnmounted(() => {
 .error-item { display: flex; align-items: flex-start; gap: 5px; font-size: var(--font-xs); line-height: 1.4; }
 .error-type { font-weight: 600; color: var(--red); white-space: nowrap; }
 .error-concepts { color: var(--text-secondary); word-break: break-all; }
+
+/* ═══════════ Responsive ═══════════ */
+@media (max-width: 768px) {
+  .page { padding: 20px 16px 36px; }
+  .profile-header { flex-direction: column; text-align: center; padding: 20px; gap: 12px; }
+  .ph-avatar { width: 52px; height: 52px; }
+  .ph-avatar-text { font-size: 20px; }
+  .ph-name { font-size: 18px; }
+  .grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .radar-chart { height: 280px; }
+}
+
+@media (max-width: 480px) {
+  .page { padding: 12px 10px 28px; }
+  .profile-header { padding: 16px; gap: 8px; }
+  .ph-avatar { width: 44px; height: 44px; }
+  .section-head h2 { font-size: 16px; }
+  .section-head p { font-size: 11px; }
+  .grid { grid-template-columns: 1fr; gap: 8px; }
+  .dim-body { padding: 14px; gap: 10px; }
+  .dim-icon { width: 38px; height: 38px; }
+  .dim-name { font-size: 13px; margin-bottom: 4px; }
+  .radar-chart { height: 240px; }
+  .skill-label { width: 50px; font-size: 10px; }
+  .hours-num { font-size: 18px; }
+  .el-input__inner { font-size: 12px !important; }
+}
 </style>

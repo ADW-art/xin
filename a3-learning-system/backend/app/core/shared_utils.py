@@ -163,11 +163,14 @@ def _get_profile_status(profile: dict | None) -> tuple[list[str], list[str]]:
     供 supervisor、chat_agent 等模块共享使用。
     """
     ALL_DIMS = ["knowledge_base", "cognitive_style", "learning_goal",
-                "weekly_hours", "preferred_resource_type", "error_patterns"]
+                "weekly_hours", "preferred_resource_type", "error_patterns",
+                "learning_phase", "interest_direction"]
     DIM_LABELS = {
         "knowledge_base": "知识基础", "cognitive_style": "认知风格",
         "learning_goal": "学习目标", "weekly_hours": "每周时间",
         "preferred_resource_type": "偏好资源", "error_patterns": "易错模式",
+        "learning_phase": "学习阶段",
+        "interest_direction": "兴趣方向",
     }
     profile = profile or {}
 
@@ -201,10 +204,13 @@ def _build_profile_guide(profile: dict | None) -> str:
         画像引导字符串，如果画像已完整则返回空字符串
     """
     ALL_DIMS = ["knowledge_base", "cognitive_style", "learning_goal",
-                "weekly_hours", "preferred_resource_type"]
+                "weekly_hours", "preferred_resource_type",
+                "learning_phase", "interest_direction"]
     DIM_LABELS = {"knowledge_base": "知识基础", "cognitive_style": "认知风格",
                   "learning_goal": "学习目标", "weekly_hours": "每周时间",
-                  "preferred_resource_type": "偏好资源"}
+                  "preferred_resource_type": "偏好资源",
+                  "learning_phase": "学习阶段",
+                  "interest_direction": "兴趣方向"}
     profile = profile or {}
     empty = [DIM_LABELS[k] for k in ALL_DIMS
              if k not in profile or profile[k] is None or profile[k] == ""]
@@ -229,6 +235,102 @@ def _build_profile_guide(profile: dict | None) -> str:
             f"当前用户画像还缺：{empty_list}。\n"
             f"在你的回复末尾，自然地带出一句追问了解缺失信息。只问1个维度，像朋友聊天一样。"
         )
+
+
+# ============================================================
+# Chat Agent 长短期记忆 — 用户上下文构建
+# ============================================================
+
+def _build_user_context(user_id: int, profile: dict | None) -> str:
+    """构建用户的长期学习状态摘要，供 chat_agent 注入 system prompt
+
+    实现跨会话"记忆"：每次 chat 对话都能看到用户正在学什么、掌握哪些概念、
+    薄弱点在哪里，从而给出更有针对性的回复。
+
+    纯工具函数，所有数据库/服务异常均静默处理（上下文缺失不应阻塞对话）。
+    """
+    if not user_id:
+        return ""
+
+    parts: list[str] = []
+
+    # ── 1. 画像摘要：学习目标 + 偏好 ──
+    if profile:
+        goal = profile.get("learning_goal", "")
+        if goal and str(goal).strip():
+            parts.append(f"学习目标: {goal}")
+        style = profile.get("cognitive_style", "")
+        if style and str(style).strip():
+            STYLE_LABELS = {
+                "visual": "视觉型（偏好图表/视频）",
+                "auditory": "听觉型（偏好音频讲解）",
+                "kinesthetic": "动手型（偏好实操/写代码）",
+                "reading": "阅读型（偏好文档/书籍）",
+            }
+            parts.append(f"认知偏好: {STYLE_LABELS.get(str(style), str(style))}")
+        hours = profile.get("weekly_hours")
+        if hours is not None:
+            try:
+                h = float(hours)
+                if h > 0:
+                    parts.append(f"每周学习时间: {h:.0f} 小时")
+            except (ValueError, TypeError):
+                pass
+
+    # ── 2. BKT 知识状态：已掌握 vs 薄弱概念 ──
+    try:
+        from app.services.bkt_service import get_tracker
+        tracker = get_tracker(user_id)
+        if tracker.nodes:
+            mastered = tracker.get_mastered()
+            weak = tracker.get_weak_points()
+            if mastered:
+                parts.append(f"已掌握概念: {', '.join(mastered[:8])}")
+            if weak:
+                parts.append(f"薄弱概念: {', '.join(weak[:8])}")
+    except Exception:
+        pass
+
+    # ── 3. 近期学习活动：从对话历史提取关注主题 ──
+    try:
+        from app.core.database import SessionLocal
+        from app.models.conversation import Conversation
+        db = SessionLocal()
+        try:
+            recent = (
+                db.query(Conversation)
+                .filter(
+                    Conversation.user_id == user_id,
+                    Conversation.role == "user",
+                )
+                .order_by(Conversation.created_at.desc())
+                .limit(10)
+                .all()
+            )
+            topics: set[str] = set()
+            INTEREST_KEYWORDS = [
+                "Python", "Java", "C++", "Go", "Rust", "JavaScript",
+                "TypeScript", "React", "Vue", "Spring", "Django",
+                "算法", "数据结构", "数据库", "网络", "前端", "后端",
+                "机器学习", "深度学习", "操作系统", "Linux", "Docker",
+                "设计模式", "面试", "LeetCode",
+            ]
+            for c in recent:
+                content = c.content or ""
+                for word in INTEREST_KEYWORDS:
+                    if word.lower() in content.lower():
+                        topics.add(word)
+            if topics:
+                parts.append(f"近期关注: {', '.join(sorted(topics)[:8])}")
+        finally:
+            db.close()
+    except Exception:
+        pass
+
+    if not parts:
+        return ""
+
+    return "## 学生当前状态\n" + "\n".join(f"- {p}" for p in parts) + "\n"
 
 
 # ============================================================
@@ -280,16 +382,61 @@ def _build_llm_messages(
             raw_history = raw_history[:-1]
 
     # 将 LangChain 消息类型转换为标准的 {"role": ..., "content": ...} 格式
+    # 注意: content 可能是 str 或 list[dict]（多模态消息含图片base64），list 直接保留
     for msg in raw_history:
         msg_type = type(msg).__name__
+        # Issue 3 Fix: 兼容 LangGraph checkpoint 恢复后 messages 元素可能为 dict
+        # dict 没有 .content 属性，必须用 msg.get("content", "") 兜底
+        content_val = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+        if isinstance(content_val, list):
+            formatted_content = content_val  # 多模态格式，直接保留
+        else:
+            formatted_content = str(content_val)
+            # Issue 1 Fix: 清理可能泄漏到对话历史中的 HTML 语法高亮标记
+            # 如果 LLM 之前生成过含 <span class="sk"> 等的代码，这些标记会进入
+            # 下一轮对话的上下文，形成自我强化的污染循环。
+            # 此处做防御性清理，确保发送给 LLM 的对话历史是干净的纯文本/Markdown。
+            formatted_content = _clean_llm_context(formatted_content)
         if 'Human' in msg_type:
-            msgs.append({"role": "user", "content": str(msg.content)})
+            msgs.append({"role": "user", "content": formatted_content})
         elif 'AI' in msg_type:
-            msgs.append({"role": "assistant", "content": str(msg.content)})
+            msgs.append({"role": "assistant", "content": formatted_content})
         # 兼容 SystemMessage 等其他类型（如有）
         elif 'System' in msg_type:
             pass  # system prompt 已由 system_prompt 参数提供，不重复
 
-    # 追加当前用户消息（核心输入）
-    msgs.append({"role": "user", "content": current_content})
+    # 追加当前用户消息（核心输入），也做清理
+    cleaned_current = _clean_llm_context(str(current_content)) if isinstance(current_content, str) else current_content
+    msgs.append({"role": "user", "content": cleaned_current})
     return msgs
+
+
+def _clean_llm_context(text: str) -> str:
+    """防御性清理：剥离可能泄露到 LLM 上下文中的 HTML 语法高亮残渣
+
+    前端 ChatMessage.vue 的 highlightCode() 使用 <span class="sk/sf/sc/sd/ss/sn">
+    做语法着色。如果这些标记通过任何路径进入对话历史（用户粘贴渲染后的代码、
+    LLM 自产生标记等），会在下一轮对话上下文中形成污染循环。
+
+    此函数剥离所有 HTML 标签和孤立的 CSS class 片段，
+    确保 LLM 收到的对话历史只包含纯 Markdown 文本。
+    """
+    if not isinstance(text, str):
+        return text
+    # Step 1: 移除完整的 HTML span/div 标签
+    cleaned = re.sub(r'<span\b[^>]*>', '', text)
+    cleaned = re.sub(r'</span>', '', cleaned)
+    cleaned = re.sub(r'<div\b[^>]*>', '', cleaned)
+    cleaned = re.sub(r'</div>', '', cleaned)
+    cleaned = re.sub(r'<code\b[^>]*>', '', cleaned)
+    cleaned = re.sub(r'</code>', '', cleaned)
+    cleaned = re.sub(r'<pre\b[^>]*>', '', cleaned)
+    cleaned = re.sub(r'</pre>', '', cleaned)
+    # Step 2: 移除 HTML 实体编码的 span 标签（&lt;span ... &gt;）
+    cleaned = re.sub(r'&lt;span\b[^&]*&gt;', '', cleaned)
+    cleaned = re.sub(r'&lt;/span&gt;', '', cleaned)
+    # Step 3: 移除孤立的 CSS class 属性片段（如 "sc"> "sk"> "sf"> "sd"> "ss"> "sn">）
+    cleaned = re.sub(r'"[a-z]{2,4}">', '', cleaned)
+    # Step 4: 移除孤立的 class="xx" 属性
+    cleaned = re.sub(r'\s*class\s*=\s*"[a-z]{2,4}"', '', cleaned)
+    return cleaned

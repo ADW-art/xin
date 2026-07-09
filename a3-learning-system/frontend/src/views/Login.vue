@@ -361,4 +361,32 @@ async function handleSubmit() {
   font-size: var(--font-sm);
   color: var(--text-secondary);
 }
+
+/* ═══════════ Responsive ═══════════ */
+@media (max-width: 768px) {
+  .login-card {
+    width: 90%;
+    max-width: 420px;
+    padding: 32px 28px 28px;
+  }
+}
+
+@media (max-width: 480px) {
+  .login-wrap {
+    padding: 16px;
+    justify-content: flex-start;
+    padding-top: 40px;
+  }
+  .login-card {
+    width: 100%;
+    padding: 28px 20px 24px;
+    border-radius: var(--radius-md);
+  }
+  .card-brand { margin-bottom: 20px; }
+  .card-brand h1 { font-size: 22px; }
+  .brand-icon svg { width: 40px; height: 40px; }
+  .brand-sub { font-size: 12px; }
+  .submit-btn { height: 42px; font-size: 14px; letter-spacing: 1px; }
+  .switch-link { margin-top: 16px; font-size: 12px; }
+}
 </style>

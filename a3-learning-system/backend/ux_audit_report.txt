@@ -1,0 +1,478 @@
+======================================================================
+A3 LEARNING SYSTEM - END-TO-END UX AUDIT REPORT
+Date: 2026-06-15
+Backend: http://127.0.0.1:8002 (api version 0.1.0)
+Test User: audit_542763 (id=126)
+======================================================================
+
+EXECUTIVE SUMMARY
+=================
+Overall: SIGNIFICANT ISSUES FOUND - Not ready for real student use.
+
+The system has good infrastructure (agents route correctly most of the time,
+BKT tracking works, resources are persisted), but the user experience is
+severely compromised by THREE critical bugs:
+
+  CRITICAL #1: profile_agent is an "attention black hole" - it intercepts
+  learning requests and gives boilerplate replies instead of routing them.
+
+  CRITICAL #2: Multi-turn conversation coherence is broken - the system
+  loses context between messages, making sequential learning impossible.
+
+  CRITICAL #3: Knowledge base is polluted with garbage entries from
+  overly aggressive regex-based knowledge extraction.
+
+Additionally, question quality and hallucination issues would confuse
+real students.
+
+======================================================================
+DETAILED FINDINGS BY SCENARIO
+======================================================================
+
+TEST SCENARIO 1: COMPLETE BEGINNER
+===================================
+
+Step 1: Registration
+--------------------
+Status: 200 OK | JWT token returned
+Result: PASS
+- User created with username "audit_542763" (id=126)
+- JWT token issued correctly
+- GET /auth/me returns correct user info
+
+Step 2: "你好，我是零基础Python初学者，之前没学过编程"
+----------------------------------------------------------
+Agent: profile_agent | Time: 5.11s
+Actual Reply (68 chars):
+  "收到，已记录。接下来你学习的主要目标是什么？考试拿高分、
+   找工作、技能提升、还是纯粹兴趣？（还有5个方面需要了解，很快就好~）"
+
+Rating: BAD (score=0)
+- The reply is a GENERIC TEMPLATE - it does NOT acknowledge the student
+  said "zero foundation" or "never programmed before"
+- The student explicitly stated their background but the system ignores it
+- Profile knowledge_base update: {"Python": 8, "者，之前没学过编程": 40.0}
+  ^^^ NOTE: The second key is GARBAGE - regex extracted partial sentence
+- A real student would feel unheard and confused why the system didn't
+  respond to their self-introduction
+
+Step 3: "我每周能学8小时"
+-------------------------
+Agent: profile_agent | Time: 1.67s
+Actual Reply (68 chars):
+  "收到，已记录。接下来你学习的主要目标是什么？考试拿高分、
+   找工作、技能提升、还是纯粹兴趣？（还有4个方面需要了解，很快就好~）"
+
+Rating: BAD (score=0)
+- IDENTICAL boilerplate response as step 2, just decrementing counter
+- Does NOT mention "8 hours" - student can't tell if system heard them
+- Profile side-effect: weekly_hours updated to 8.0 (CORRECT - data is
+  stored, but the user gets NO confirmation)
+- UX problem: data silently saved; user has zero feedback
+
+Step 4: "教我Python列表推导式"
+------------------------------
+Agent: resource_agent | Time: 9.19s
+Actual Reply (first 200 chars):
+  "**【Python列表推导式】** --- ### 概述 列表推导式是Python中一种强大的语法，
+   它允许你通过一行或多行代码来创建列表。这种语法简洁、高效，使得处理数据时
+   更加直观和方便。 ### 核心概念 - **语法结构**：`[expression for item in
+   iterable]` - **基本用法**：用于从可迭代对象..."
+
+Rating: GOOD (score=8)
+- Content is accurate, well-structured with code examples
+- Appropriate for beginner level
+- Resource was automatically saved (SSE "resource" event sent with type "document")
+- A real student would find this useful
+
+Step 5: "出3道Python基础题给我做"
+----------------------------------
+Agent: question_agent | Time: 6.73s
+Actual Reply (summarized):
+  Question 1: 在Python中，以下哪个函数用于判断一个数是否为素数？
+  A. is_prime(x) B. is_even(x) C. is_odd(x) D. is_square(x)
+  Answer: A
+  "解析：在Python中，is_prime()函数用于判断一个数是否为素数。"
+
+Rating: GOOD structure, but CONTAINS FACTUAL ERROR
+- *** FACT CHECK FAIL: is_prime() is NOT a Python built-in function! ***
+  There is no is_prime() in Python standard library. This would teach a
+  beginner on how to write a primality test.
+- Questions 2-3 are reasonable (fill-in-the-blank about list comprehensions)
+- A real beginner would learn WRONG information from Question 1
+
+Step 6: BKT answer submission
+-----------------------------
+3 answers submitted via POST /api/bkt/answer:
+  - "Python基础" correct=True  -> p_known=0.7951 (level: familiar)
+  - "Python数据类型" correct=False -> p_known=0.3267 (level: learning)
+  - "Python运算符" correct=True  -> p_known=0.8115 (level: familiar)
+Result: PASS - BKT engine works correctly, differentiates correct/incorrect
+
+Step 7: "评估我的Python学习情况"
+--------------------------------
+Agent: evaluation_agent | Time: 6.81s
+Actual Reply (first 200 chars):
+  "### 知识掌握度 根据提供的数据，学生在Python编程方面的基础为8分，
+   显示出对基础知识的掌握程度。然而，对于更高级的知识，如"8小时"和
+   "者，之前没学过编程"，学生的掌握概率均为40%..."
+
+Rating: GOOD structure, but contents partially GARBAGE
+- The evaluation references "8小时" and "者，之前没学过编程" as "knowledge points"
+  These are pollution from the broken knowledge_base data
+- The evaluation correctly mentions BKT data (81.15% mastery of Python基础)
+- Self-contradictory: says "knowledge base score 8" but then "81.15% mastery"
+- A real student would be confused by being evaluated on "8小时" and "之前没学过编程"
+
+Step 8: "制定学习计划"
+----------------------
+Agent: profile_agent (WRONG!) | Time: 1.64s
+Actual Reply (71 chars):
+  "好的，记录下来了。下一个问题：你学习的主要目标是什么？
+   考试拿高分、找工作、技能提升、还是纯粹兴趣？
+   > 还剩 4 个问题，马上就完成~"
+
+Rating: BAD / ROUTING FAILURE
+- *** ROUTING BUG: "制定学习计划" should route to PATH_AGENT ***
+  Instead it was routed to profile_agent which gave a useless boilerplate reply
+- The student explicitly asks for a learning plan and gets asked about goals
+- Meanwhile, the path endpoint shows ACTUAL data exists:
+  path keys: ['phases', 'next_topics', 'weak_points', 'mastered_count',
+               'total_nodes', 'unlocked_count', 'stored_path_id', 'algorithm']
+  So the system CAN generate paths, but profile_agent intercepted the request
+- A real student would be FRUSTRATED - they asked for a plan, got a form question
+
+TEST SCENARIO 2: HALLUCINATION CHECK
+=====================================
+
+H1: "Python中有没有delete_all_files()这个函数？"
+--------------------------------------------------
+Agent: supervisor | Time: 4.59s
+Reply: "Python中没有名为delete_all_files()的函数。这个函数可能是某个特定库或
+        模块中的函数，或者是自定义的函数。"
+
+Rating: ACCEPTABLE - Correctly states it doesn't exist
+- The second sentence ("可能是某个特定库...") is slightly misleading but not
+  actively harmful - it's a reasonable caveat for an AI
+
+H2: "请推荐一些完全不存在的Python库"
+-------------------------------------
+Agent: supervisor | Time: 8.69s
+Reply (first 200 chars):
+  "以下是一些完全不存在的Python库：
+   1. py-unknown：这是一个不存在的库，它试图将Python代码转换为C语言。
+   2. py-unknown-module：这是一个不存在的模块，它试图将Python代码转换为C语言。
+   3. py-unknown-function：这是一个不存在的函数..."
+
+Rating: HALLUCINATION / PARADOXICAL COMPLIANCE
+- *** THE LLM ACTUALLY "RECOMMENDED" FAKE LIBRARIES ***
+- While it labeled them as "non-existent" (ironically following the prompt),
+  a confused student might not understand the meta-humor and think these are real
+- This shows the LLM will comply with absurd requests rather than refuse
+- A real student asking this would be confused
+
+H3: "你能教我一些在大学期末考试中根本不考的高级量子计算Python库吗"
+------------------------------------------------------------------
+Agent: resource_agent | Time: 28.36s
+Reply (2822 chars): Taught about qiskit, pyquil, and quantumlib
+
+Rating: GOOD - Turned a trick prompt into legitimate teaching
+- The LLM correctly identified that qiskit/pyquil are REAL quantum computing
+  libraries and provided useful educational content
+- This is the CORRECT behavior: redirect absurd requests to useful content
+- A real student curious about quantum computing would learn something
+
+H4: "I want to learn Python 数据分析, what should I do first?"
+---------------------------------------------------------------
+Agent: question_agent (WRONG!) | Time: 7.0s
+Reply: Generated Python quiz questions instead of answering "what to do first"
+
+Rating: BAD / ROUTING FAILURE
+- *** Should have been resource_agent or supervisor ***
+- The student asked "what should I do first?" (advice/guidance)
+- Instead got quiz questions about prime numbers (completely irrelevant)
+- Supervisor intent classification FAILED - treated a learning guidance request
+  as a quiz request
+
+TEST SCENARIO 3: MULTI-TURN COHERENCE
+======================================
+
+M1: "我想学习Python数据分析"
+----------------------------
+Agent: profile_agent (WRONG!) | Time: 2.44s
+Reply: "好的，记录下来了。下一个问题：你更喜欢通过什么方式学习？
+        看视频、读文档、动手做项目、还是听讲解？"
+
+Rating: BAD / ROUTING FAILURE
+- *** "我想学习Python数据分析" is clearly a learning intent, NOT a profile
+  question *** - Should route to resource_agent
+- Profile agent hijacked it and asked about learning style
+- Context established: Python + 数据分析 (correct in profile data)
+
+M2: "需要先学哪些基础"
+----------------------
+Agent: profile_agent (WRONG!) | Time: 1.43s
+Reply: "好的，记录下来了。下一个问题：你更喜欢通过什么方式学习？
+        看视频、读文档、动手做项目、还是听讲解？"
+
+Rating: BAD / CONTEXT LOST
+- *** IDENTICAL reply to M1! *** The profile agent is stuck in a loop
+- "需要先学哪些基础" is clearly a follow-up to "Python数据分析" - should
+  route to resource_agent or path_agent
+- The system has ZERO memory of the previous message
+
+M3: "给我推荐第一个要学的知识点"
+---------------------------------
+Agent: resource_agent | Time: 8.94s
+Reply (first 200 chars):
+  "**【重要】代码示例必须使用上下文中指定的编程语言（如果有）...**
+   ## 第一章：绪论 ### 1.1 概述
+   人工智能是一门研究如何使计算机能够模拟人类智能行为的学科..."
+
+Rating: BAD / WRONG TOPIC
+- FINALLY went to resource_agent, but generated content about AI introduction
+  instead of Python data analysis
+- System completely lost thread: User asked about Python数据分析 -> got AI 绪论
+- The system prompt injection "代码示例必须使用上下文中指定的编程语言" leaked
+  into the user-visible output
+
+COHERENCE SCORE: 0/2 - CRITICAL FAILURE
+
+ADDITIONAL CHECKS
+=================
+
+Anonymous User (no auth token)
+------------------------------
+Input: "什么是Python变量"
+Agent: resource_agent | Time: 11.77s
+Reply: Good content about Python variables, scope, naming rules
+Rating: GOOD (score=8)
+Result: System works WITHOUT authentication - PASS
+
+Profile Update Verification
+---------------------------
+Initial: kb=None, style=None, hours=None, goal=None
+Final: kb={"Python":16.0, "8小时":40.0, "习规划":40.0, "的知识点":40.0,
+            "知识基础":40.0, "学习效果评估":40.0, "者，之前没学过编程":40.0},
+       weekly_hours=8.0, learning_goal="考试",
+       dimension_scores={"knowledge":35, "logic":62, "focus":75, "speed":60,
+                          "practice":81, "overall":61.7}
+
+Result: PARTIALLY WORKS
+- weekly_hours=8.0 correctly extracted and stored
+- learning_goal="考试" was silently inferred (student never said this)
+- knowledge_base is POLLUTED with garbage entries (see below)
+- cognitive_style, error_patterns, preferred_resource_type remain null
+
+Knowledge Base Pollution Analysis
+----------------------------------
+Current knowledge_base entries:
+  "Python": 16.0          <- CORRECT (was 8, boosted to 16)
+  "8小时": 40.0            <- GARBAGE (text fragment mistaken as knowledge point)
+  "习规划": 40.0            <- GARBAGE (substring of "学习规划")
+  "的知识点": 40.0          <- GARBAGE (substring fragment)
+  "知识基础": 40.0          <- MEANINGLESS (generic category, not a skill)
+  "学习效果评估": 40.0      <- MEANINGLESS (evaluation result, not a skill)
+  "者，之前没学过编程": 40.0 <- GARBAGE (partial sentence starting with "者")
+
+- 5 out of 7 knowledge_base entries are GARBAGE
+- Root cause: _normalize_concept_name() regex is too aggressive, catching
+  text fragments as knowledge points
+- Direct impact: Evaluation agent references garbage entries as "advanced
+  knowledge points that need improvement"
+
+BKT Status
+----------
+Total concepts: 1, Average mastery: 0.8115
+Result: BKT engine works but only tracks concepts explicitly submitted
+        via the dedicated endpoint. BKT is NOT updated by chat interactions.
+
+Resources
+---------
+Endpoint returned empty/invalid response (JSON decode error).
+Resources endpoint requires investigation - possible bug.
+
+======================================================================
+BUG SEVERITY CLASSIFICATION
+======================================================================
+
+CRITICAL (must fix before student use):
+----------------------------------------
+C1: Profile_agent is a conversation dead-end
+    - Intercepts learning requests ("制定学习计划", "我想学习Python数据分析",
+      "需要先学哪些基础") and gives boilerplate replies
+    - Profile agent's intent priority is too high in supervisor routing
+    - Fix: Add intent exhaustion detection - if profile agent has asked the
+      same question 3+ times without progress, route to intended agent
+
+C2: Multi-turn context is completely lost
+    - Each message is effectively treated as a new conversation
+    - "我想学习Python数据分析" followed by "需要先学哪些基础" does not
+      maintain context - profile agent gives same boilerplate reply
+    - Fix: _build_llm_messages() should verify that the last_k user messages
+      are actually in the history being sent to the LLM
+
+MAJOR (significantly harms UX):
+---------------------------------
+M1: Knowledge base is polluted with garbage entries
+    - _normalize_concept_name() regex catches text fragments
+    - "8小时", "者之前没学过编程", "的知识点" are stored as knowledge points
+    - Evaluation agent then references these as "advanced knowledge points"
+    - Fix: Add blacklist filter for known garbage patterns, enforce minimum
+      concept name length/format
+
+M2: Question agent generates factually incorrect content
+    - "is_prime()是Python内置函数" is FALSE
+    - A real beginner would learn wrong information
+    - Fix: Add fact-checking prompt or post-generation validation
+
+M3: Supervisor intent classification is unreliable
+    - "制定学习计划" routes to profile_agent instead of path_agent
+    - "I want to learn Python 数据分析" routes to question_agent not resource
+    - "我想学习Python数据分析" routes to profile_agent
+    - Fix: Review intent classification prompt, add explicit overrides for
+      common patterns
+
+MODERATE (noticeable but not blocking):
+----------------------------------------
+D1: Profile agent responses are completely generic
+    - Same template every time: "收到，已记录。接下来..." + counter
+    - Does not acknowledge what was just said
+    - Fix: Inject the detected intent/data into the profile agent's reply
+
+D2: Anonymous user works but generates resources without user context
+    - "什么是Python变量" returned good content
+    - But no mechanism to associate generated resource with a user
+
+D3: Question agent reuses the same hallucinated question
+    - is_prime() question appears in BOTH test run 1 (step 4) AND run 2 (H4)
+    - This suggests the LLM has a fixed "template" for beginner questions
+
+POSITIVES (what works well):
+-----------------------------
+P1: JWT auth flow is clean - register, login, me, profile all work
+P2: SSE streaming works - agent switches, content streaming, done events
+P3: BKT Bayesian knowledge tracing engine correctly updates P(known)
+P4: Resource persistence - generated content is saved to DB automatically
+P5: Anonymous access works - students can try before registering
+P6: Agent routing DOES work for clear cases (resource_agent, question_agent,
+    evaluation_agent for explicit requests)
+
+======================================================================
+RESPONSE TIME SUMMARY
+======================================================================
+All times in seconds:
+
+Beginner intro (profile_agent):    5.11s  | 68 chars
+Weekly hours (profile_agent):      1.67s  | 68 chars
+List comprehension (resource):     9.19s  | 567 chars
+Generate questions (question):     6.73s  | 435 chars
+Evaluation (evaluation):           6.81s  | 726 chars
+Learning plan (profile MISROUTE):  1.64s  | 71 chars
+Non-existent function (supervisor):4.59s  | 65 chars
+Fake libraries (supervisor):       8.69s  | 553 chars
+Quantum computing (resource):     28.36s  | 2822 chars
+Mixed language (question MISROUTE):7.00s  | 764 chars
+Goal statement (profile MISROUTE): 2.44s  | 70 chars
+Prerequisites (profile MISROUTE):  1.43s  | 70 chars
+First topic (resource):            8.94s  | 612 chars
+Anonymous (resource):             11.77s  | 1060 chars
+
+Average: ~7.5s per response
+Profile agent responses: ~1.6s (very fast - using cached template?)
+Resource agent responses: 9-28s (reasonable for generation)
+
+======================================================================
+WOULD A REAL STUDENT BE SATISFIED?
+======================================================================
+
+NO. A real student would be confused and frustrated. Here's their likely
+experience:
+
+1. Register -> works fine
+2. "你好，我是零基础..." -> "收到，已记录。你的学习目标是什么？"
+   Student: "Wait, I just told you I'm a complete beginner, aren't you
+   going to help me with that?"
+
+3. "我每周能学8小时" -> "收到，已记录。你的学习目标是什么？"
+   Student: "I just told you that... why are you asking again?"
+
+4. "教我Python列表推导式" -> Generates good content
+   Student: "OK, this is useful!"
+
+5. "出3道题" -> Generates questions
+   Student: "Wait, is_prime() isn't a built-in function... is this right?"
+
+6. "评估我的学习情况" -> "学生在'8小时'和'者，之前没学过编程'方面需要提升"
+   Student: "What? I'm being evaluated on '8 hours' and partial sentences?"
+
+7. "制定学习计划" -> "好的，记录下来了。你的学习目标是什么？"
+   Student: "I ALREADY TOLD YOU! Give me my learning plan!"
+   (Student closes browser tab)
+
+======================================================================
+ROOT CAUSE ANALYSIS (from source code inspection)
+======================================================================
+
+ROOT CAUSE #1: Aggressive profile keyword matching breaks learning flow
+-------------------------------------------------------------------------
+File: app/agents/supervisor.py, lines 239-243 (keyword override):
+    profile_kw = ["我是", "我想学", "我有", "我的目标", "初学者", "想找", "求职", "工作"]
+    if any(k in last_msg for k in profile_kw):
+        intent = "profile"
+
+And in _keyword_fallback(), line 99:
+    if any(k in text for k in ["我是", "我想学", "我有", ...]):
+        return {"intent": "profile", "params": {}}
+
+PROBLEM: "我想学X" is the MOST COMMON Chinese learning intent expression.
+Every "我想学Python数据分析" gets hijacked by profile_agent instead of
+resource_agent, because "我想学" matches the profile keyword list.
+
+ROOT CAUSE #2: KB pollution from two separate code paths
+----------------------------------------------------------
+- _extract_and_boost() in chat.py uses regex to extract concepts from user
+  messages for knowledge_base boosting, but has NO blacklist filtering
+- profile_agent.py's KB_BLACKLIST (21 entries) only applies during profile
+  agent extraction, NOT during chat-level boosting
+- Result: "者，之前没学过编程", "8小时", "的知识点" are stored as knowledge points
+
+ROOT CAUSE #3: Non-deterministic LLM intent classification
+------------------------------------------------------------
+supervisor uses spark.chat_sync() (LLM API) to classify intent. The keyword
+fallback was supposed to be the safety net, but it has bugs (see #1).
+Evidence: "制定学习计划" correctly routed to path_agent in run 1, but to
+profile_agent in run 2. Same input, different results.
+
+======================================================================
+RECOMMENDED FIX PRIORITY
+======================================================================
+
+1. FIX PROFILE AGENT ROUTING (1-2 hours)
+   - Add intent exhaustion: if profile agent repeats same question 3x, route away
+   - Lower profile agent's routing priority when message clearly matches
+     other agents (e.g., "制定...计划" -> path_agent)
+   - Let profile agent reply to profile updates WHILE also routing to the
+     intended agent (compound routing)
+
+2. FIX KNOWLEDGE BASE POLLUTION (30 min)
+   - Add filter to _normalize_concept_name() to reject:
+     - Entries shorter than 2 CJK characters
+     - Entries matching known garbage patterns
+     - Entries that are substrings of the original message without semantic meaning
+
+3. FIX MULTI-TURN CONTEXT (2-3 hours)
+   - Verify conversation history is actually being passed to LLM
+   - Add context injection to ALL agent prompts, not just resource_agent
+   - Add "do not repeat profile questions" rule to supervisor prompt
+
+4. FIX QUESTION QUALITY (30 min)
+   - Add explicit instruction: "Do not claim any function is a Python built-in
+     unless you are absolutely certain. If unsure, say 'custom function'"
+   - Add a fact-checking assertion to the question agent prompt
+
+5. FIX PROFILE AGENT RESPONSES (1 hour)
+   - Personalize responses: "已记录你每周学8小时" instead of "收到，已记录"
+   - Acknowledge what was just detected: "了解你是零基础Python初学者"
+
+======================================================================

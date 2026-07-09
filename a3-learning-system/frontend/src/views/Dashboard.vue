@@ -122,6 +122,37 @@
       </div>
 
       <!-- 智能推荐 — Agent联动建议 -->
+      <!-- P1: 画像完善度卡 (业内最佳实践: 顶部高优+可跳过+进度可视化) -->
+      <div
+        v-if="profile && profileCompletion < 1"
+        class="panel panel-profile-cta"
+        @click="$router.push('/profile')"
+      >
+        <div class="profile-cta-content">
+          <div class="profile-cta-icon">
+            <el-icon :size="22"><UserFilled /></el-icon>
+          </div>
+          <div class="profile-cta-info">
+            <div class="profile-cta-title">完善学习画像</div>
+            <div class="profile-cta-desc">
+              已完善 <strong>{{ filledCount }}/{{ totalCount }}</strong> 项
+              · 个性化推荐更精准
+            </div>
+            <el-progress
+              :percentage="Math.round(profileCompletion * 100)"
+              :stroke-width="6"
+              :show-text="false"
+              :color="profileCompletion >= 0.6 ? '#67C23A' : '#409EFF'"
+              class="profile-cta-progress"
+            />
+          </div>
+          <el-button type="primary" round class="profile-cta-btn">
+            去完善
+            <el-icon class="el-icon--right"><ArrowRight /></el-icon>
+          </el-button>
+        </div>
+      </div>
+
       <div v-if="suggestions.length > 0" class="panel panel-suggestions">
         <div class="panel-hd">
           <el-icon :size="16"><Sunny /></el-icon>
@@ -253,7 +284,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, onMounted, nextTick, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import * as echarts from 'echarts'
 import api from '@/api/index'
@@ -281,6 +312,31 @@ const recentResources = ref<ResourceItem[]>([])
 const kbCount = ref(0)
 const exCount = ref(0)
 
+// ═══════════ 画像完善度计算 (业内最佳实践: 顶部高优+可跳过) ═══════════
+// 关键字段: 6 个核心维度，参考 ChatGPT Custom Instructions + Claude Profile
+const PROFILE_FIELDS = [
+  'cognitive_style',      // 认知风格
+  'learning_goal',        // 学习目标
+  'weekly_hours',         // 每周学习时长
+  'background',            // 背景
+  'interests',            // 兴趣方向
+  'experience_level',     // 经验水平
+] as const
+
+const filledCount = computed(() => {
+  if (!profile.value) return 0
+  return PROFILE_FIELDS.filter(f => {
+    const v = (profile.value as any)[f]
+    if (v === null || v === undefined || v === '') return false
+    if (Array.isArray(v) && v.length === 0) return false
+    return true
+  }).length
+})
+const totalCount = computed(() => PROFILE_FIELDS.length)
+const profileCompletion = computed(() =>
+  filledCount.value / Math.max(totalCount.value, 1)
+)
+
 // Agent 调用统计 (真实数据: chat_history.agent_type)
 const realAgentStats = ref<{name:string;label:string;color:string;calls:number}[]>([
   { name:'supervisor', label:'Supervisor', color:'#2563EB', calls:0 },
@@ -291,12 +347,13 @@ const realAgentStats = ref<{name:string;label:string;color:string;calls:number}[
   { name:'profile_agent', label:'Profile', color:'#60A5FA', calls:0 },
 ])
 
-// Quick actions (all navigate to functional routes)
+// Quick actions (业内最佳实践: 主页快捷入口 vs 智能推荐互补，不重复)
+// 只保留"系统级跳转"入口，避免和智能推荐/ChatView prompt starter 重复
 const quickActions = [
   { label: '开始对话', icon: 'ChatDotRound', cls: 'primary', action: () => router.push('/chat') },
-  { label: '生成资源', icon: 'MagicStick', cls: '', action: () => router.push('/chat?intent=resource') },
-  { label: '开始练习', icon: 'EditPen', cls: '', action: () => router.push('/chat?intent=question') },
-  { label: '规划路径', icon: 'Guide', cls: '', action: () => router.push('/learning-path') },
+  { label: '知识图谱', icon: 'Share', cls: '', action: () => router.push('/learning-path') },
+  { label: 'BKT 中心', icon: 'DataLine', cls: '', action: () => router.push('/bkt-center') },
+  { label: 'Agent 协作', icon: 'Connection', cls: '', action: () => router.push('/agent-center') },
 ]
 
 // New user detection: no profile data, no resources, no BKT data
@@ -321,9 +378,23 @@ function loadSuggestions() {
   // 从 profile.suggestions 读取 Agent 联动建议
   const s = profile.value?.suggestions
   if (Array.isArray(s) && s.length > 0) {
-    // 过滤掉过期的建议 (30分钟内)
     const now = Date.now() / 1000
-    suggestions.value = s.filter((sg: any) => !sg.ts || (now - sg.ts) < 86400)
+    // 1. 过滤掉过期的建议 (24小时内)
+    let valid = s.filter((sg: any) => !sg.ts || (now - sg.ts) < 86400)
+    // 2. P1 修复: 客户端去重 - 同 intent 只保留最新一条
+    const dedup = new Map<string, any>()
+    for (const sg of valid) {
+      const prev = dedup.get(sg.intent)
+      if (!prev || (sg.ts || 0) > (prev.ts || 0)) {
+        dedup.set(sg.intent, sg)
+      }
+    }
+    // 3. 按时间倒序 + 最多 3 条
+    suggestions.value = Array.from(dedup.values())
+      .sort((a, b) => (b.ts || 0) - (a.ts || 0))
+      .slice(0, 3)
+  } else {
+    suggestions.value = []
   }
 }
 
@@ -620,12 +691,12 @@ async function loadAgentStats() {
     // If we received history but every stat is still 0, log the raw response
     // so the developer can see whether agent_type is really missing.
     if (history.length > 0 && realAgentStats.value.every(a => a.calls === 0)) {
-      console.warn('[Dashboard] 对话历史已加载但 agent_type 全部为空，样本记录:', history.slice(0, 3))
+      if (import.meta.env.DEV) console.warn('[Dashboard] 对话历史已加载但 agent_type 全部为空，样本记录:', history.slice(0, 3))
     }
   } catch (e: unknown) {
     // Non-fatal: agent stats are supplemental, not critical
     const msg = e instanceof Error ? e.message : String(e)
-    console.warn('[Dashboard] Agent 统计加载失败:', msg)
+    if (import.meta.env.DEV) console.warn('[Dashboard] Agent 统计加载失败:', msg)
   }
 }
 
@@ -644,9 +715,27 @@ onMounted(() => { loadAll(); loadAgentStats() })
   box-sizing: border-box;
 }
 
-.col-left { width: 252px; flex-shrink: 0; display: flex; flex-direction: column; gap: 12px; height: 100%; overflow-y: auto; overflow-x: hidden; }
-.col-center { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; height: 100%; overflow-y: auto; overflow-x: hidden; }
-.col-right { width: 286px; flex-shrink: 0; display: flex; flex-direction: column; gap: 12px; height: 100%; overflow-y: auto; overflow-x: hidden; }
+.col-left {
+  width: 252px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  /* P1 修复: 加 min-height: 0 + 滚动条美化，让超长内容可滚动而非挤压 */
+  min-height: 0;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: #CBD5E1 transparent;
+  padding-right: 4px;
+}
+.col-left::-webkit-scrollbar { width: 6px; }
+.col-left::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 3px; }
+.col-left::-webkit-scrollbar-track { background: transparent; }
+
+.col-center { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; min-height: 0; height: 100%; overflow-y: auto; overflow-x: hidden; }
+.col-right { width: 286px; flex-shrink: 0; display: flex; flex-direction: column; gap: 12px; min-height: 0; height: 100%; overflow-y: auto; overflow-x: hidden; }
 
 /* ═══════════ Panel ═══════════ */
 .panel {
@@ -677,7 +766,7 @@ onMounted(() => { loadAll(); loadAgentStats() })
 .empty-mini.safe { color: #60A5FA; }
 
 /* ═══════════ Left — Profile ═══════════ */
-.panel-profile .panel-bd { padding-top: 0; position: relative; }
+.panel-profile .panel-bd { padding-top: 0; position: relative; text-align: center; }
 
 .profile-banner {
   height: 48px; margin: -12px -14px 0;
@@ -692,21 +781,36 @@ onMounted(() => { loadAll(); loadAgentStats() })
   color: var(--primary); display: flex; align-items: center; justify-content: center;
   font-size: 17px; font-weight: 700; border: 2.5px solid #fff;
   box-shadow: 0 2px 8px rgba(37,99,235,.15); z-index: 1;
+  flex-shrink: 0;
 }
-.profile-name { text-align: center; font-size: 13px; font-weight: 600; color: #1F2937; margin-top: 6px; }
+.profile-name { text-align: center; font-size: 13px; font-weight: 600; color: #1F2937; margin-top: 6px; word-break: break-all; }
 .profile-tag {
   display: inline-block; margin: 4px auto 0; padding: 2px 9px;
   background: rgba(37,99,235,.07); color: #2563EB; border-radius: 12px;
   font-size: 10px; font-weight: 500; text-align: center;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .profile-stats {
   display: flex; justify-content: center; gap: 24px;
   margin-top: 10px; padding-top: 10px;
   border-top: 1px dashed #EBEEF3;
+  flex-wrap: wrap;
 }
-.pstat { text-align: center; }
-.pstat-val { font-size: 17px; font-weight: 700; color: #1F2937; line-height: 1.2; }
-.pstat-label { display: block; font-size: 10px; color: #9CA3AF; margin-top: 1px; }
+.pstat { text-align: center; min-width: 0; flex: 1; }
+.pstat-val {
+  display: block;
+  font-size: 15px; font-weight: 700; color: #1F2937;
+  line-height: 1.2;
+  max-width: 100px;
+  margin: 0 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pstat-label { display: block; font-size: 10px; color: #9CA3AF; margin-top: 2px; }
 
 /* ═══════════ Left — Path ═══════════ */
 .path-step {
@@ -780,6 +884,50 @@ onMounted(() => { loadAll(); loadAgentStats() })
 
 /* ── 智能推荐面板 (参照RAG页面配色) ── */
 .panel-suggestions { border: 1px solid var(--border) !important; background: var(--bg-card) !important; }
+
+/* ── P1: 画像完善度卡 (业内最佳实践: 顶部高优) ── */
+.panel-profile-cta {
+  cursor: pointer;
+  border: 1px solid #DBE7FF !important;
+  background: linear-gradient(135deg, #F0F7FF 0%, #E0EBFF 100%) !important;
+  transition: all 0.2s ease;
+  margin-bottom: 12px;
+}
+.panel-profile-cta:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(64, 158, 255, 0.15);
+  border-color: #409EFF !important;
+}
+.profile-cta-content {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+}
+.profile-cta-icon {
+  width: 44px; height: 44px;
+  background: #409EFF;
+  color: #fff;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.profile-cta-info { flex: 1; min-width: 0; }
+.profile-cta-title {
+  font-size: 15px; font-weight: 600;
+  color: #1F2937;
+  margin-bottom: 4px;
+}
+.profile-cta-desc {
+  font-size: 12px; color: #6B7280;
+  margin-bottom: 6px;
+}
+.profile-cta-progress {
+  max-width: 240px;
+}
+.profile-cta-btn {
+  flex-shrink: 0;
+}
 .sg-item {
   display: flex; align-items: center; gap: 10px;
   padding: 10px 12px; margin-bottom: 6px;

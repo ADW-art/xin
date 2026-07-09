@@ -233,9 +233,18 @@ if __name__ == "__main__":
     input_path = os.path.join(base, "..", "..", "..", "docs", "knowledge_graph.json")
     output_path = os.path.join(base, "..", "..", "..", "docs", "knowledge_graph_governed.json")
 
+    # Read raw counts before governance for accurate logging
+    if os.path.exists(input_path):
+        with open(input_path, "r", encoding="utf-8") as f:
+            raw_data = json.load(f)
+        raw_nodes = raw_data.get("nodes", [])
+        raw_edges = raw_data.get("edges", {})
+        raw_node_count = len(raw_nodes)
+        raw_edge_count = len(raw_edges) if isinstance(raw_edges, dict) else len(raw_edges)
+
     result = govern_knowledge_graph(input_path, output_path)
-    print(f"治理前: 55 nodes, 1580 edges")
-    print(f"治理后: {result['nodes_count']} nodes, {result['edges_count']} edges")
-    print(f"节点样例:")
+    logger.info("治理前: %d nodes, %d edges", raw_node_count, raw_edge_count)
+    logger.info("治理后: %d nodes, %d edges", result['nodes_count'], result['edges_count'])
+    logger.info("节点样例:")
     for n in result["nodes"][:15]:
-        print(f"  {n['name']} (source={n['source']})")
+        logger.info("  %s (source=%s)", n['name'], n['source'])

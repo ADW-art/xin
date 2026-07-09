@@ -1,7 +1,21 @@
 <template>
   <div class="agent-center">
+    <!-- ═══ Loading 状态 ═══ -->
+    <div v-if="loading" class="ac-loading">
+      <el-icon class="spinner" :size="32"><Loading /></el-icon>
+      <span>加载协作拓扑...</span>
+    </div>
+
+    <!-- ═══ Error 状态 ═══ -->
+    <div v-else-if="loadError" class="ac-error-state">
+      <el-icon :size="40"><WarningFilled /></el-icon>
+      <h3>加载失败</h3>
+      <p>{{ loadError }}</p>
+      <el-button type="primary" @click="loadAgentData">重新加载</el-button>
+    </div>
+
     <!-- ═══ 主体内容区：拓扑图为核心 ═══ -->
-    <main class="ac-body">
+    <main v-else class="ac-body">
       <!-- 主拓扑图区域（占据核心） -->
       <section class="topology-main">
         <!-- 顶部工具条 -->
@@ -318,7 +332,8 @@ const canvasWidth = 820
 const canvasHeight = 480
 
 // ── 状态变量 ──
-// (loading ref removed — unused)
+const loading = ref(true)
+const loadError = ref('')
 const isSystemActive = ref(false)
 const selectedAgent = ref<string | null>(null)
 const traces = ref<any[]>([])
@@ -633,7 +648,8 @@ async function loadLatestTrace() {
     })
     applyLatestTrace(data)
   } catch (error) {
-    console.warn('AgentCenter: 获取最新调用链追踪失败', error)
+    if (import.meta.env.DEV) console.warn('AgentCenter: 获取最新调用链追踪失败', error)
+    // 非关键路径：不影响整体加载状态
   }
 }
 
@@ -680,7 +696,9 @@ function applyLatestTrace(data: any) {
   if (agentsRegistry['supervisor']) agentsRegistry['supervisor'].isActive = true
 }
 
-onMounted(async () => {
+async function loadAgentData() {
+  loading.value = true
+  loadError.value = ''
   try {
     const [manifestResult, historyResult] = await Promise.all([
       api.get('/agent-trace/manifest').catch(() => ({ data: [] })),
@@ -744,10 +762,16 @@ onMounted(async () => {
     // 拉取最近一次真实 Agent 调用链 → 用真实 token/耗时/轨迹覆盖历史估算
     await loadLatestTrace()
 
-  } catch (error) {
-    console.warn('AgentCenter: 历史数据加载异常', error)
+  } catch (e: unknown) {
+    const err = e as { response?: { data?: { detail?: string } }; message?: string }
+    loadError.value = err?.response?.data?.detail || err?.message || '历史数据加载异常，请检查网络连接'
+    if (import.meta.env.DEV) console.warn('AgentCenter: 历史数据加载异常', e)
+  } finally {
+    loading.value = false
   }
-})
+}
+
+onMounted(() => { loadAgentData() })
 
 onUnmounted(() => {
   if (animationFrameId) cancelAnimationFrame(animationFrameId)
@@ -763,6 +787,50 @@ onUnmounted(() => {
   background: #F5F7FA;
   overflow: hidden;
   min-height: 0;
+}
+
+/* ═══ Loading 状态 ═══ */
+.ac-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  height: 100%;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+.spinner { animation: spin 1s linear infinite; color: var(--primary); }
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ═══ Error 状态 ═══ */
+.ac-error-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  text-align: center;
+  padding: 40px;
+}
+.ac-error-state .el-icon {
+  color: var(--red, #EF4444);
+  margin-bottom: 16px;
+}
+.ac-error-state h3 {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 8px 0;
+}
+.ac-error-state p {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0 0 20px 0;
+  max-width: 360px;
 }
 
 /* ═══ Main Body（拓扑图为核心） ═══ */
@@ -988,4 +1056,43 @@ onUnmounted(() => {
   color: #64748B; transition: all 0.15s;
 }
 .close-detail-btn:hover { background: #E2E8F0; color: #334155; transform: rotate(90deg); }
+
+/* ═══════════ Responsive ═══════════ */
+@media (max-width: 768px) {
+  .agent-center { height: auto; min-height: calc(100dvh - var(--header-h)); }
+  .ac-body { flex-direction: column; overflow-y: auto; }
+  .topology-main { flex: none; width: 100%; min-height: 380px; }
+  .topology-toolbar { flex-wrap: wrap; gap: 8px; padding: 6px 12px; }
+  .toolbar-left { font-size: 13px; }
+  .toolbar-center { order: 3; width: 100%; justify-content: flex-start; }
+  .toolbar-right { order: 2; }
+  .topology-svg { max-width: 100%; max-height: 360px; }
+  .sidebar-right { width: 100%; border-left: none; border-top: 1px solid #E8ECF1; max-height: 260px; }
+  .trace-panel { height: 90px; }
+  .floating-stats { top: 8px; left: 8px; min-width: 200px; padding: 10px 12px; }
+  .float-num { font-size: 15px; }
+}
+
+@media (max-width: 480px) {
+  .topology-main { min-height: 300px; }
+  .topology-toolbar { padding: 4px 8px; gap: 4px; }
+  .toolbar-left { font-size: 12px; }
+  .toolbar-legend { gap: 8px; }
+  .legend-item { font-size: 10px; }
+  .agent-quick-select { gap: 2px; padding: 2px; border-radius: 8px; }
+  .quick-agent-btn { width: 28px; height: 28px; border-radius: 6px; }
+  .topology-svg { max-height: 280px; }
+  .floating-stats { top: 4px; left: 4px; min-width: 170px; padding: 8px 10px; border-radius: 8px; }
+  .float-num { font-size: 13px; }
+  .float-label { font-size: 8px; }
+  .sidebar-right { max-height: 220px; }
+  .detail-content { padding: 10px 12px; gap: 10px; }
+  .metrics-grid { gap: 6px; }
+  .trace-panel { height: 80px; }
+  .trace-head { padding: 5px 12px; }
+  .trace-scroll { padding: 4px 12px 6px; }
+  .trace-entry { padding: 4px 8px; font-size: 10px; }
+  .ac-error-state { padding: 20px; }
+  .ac-error-state h3 { font-size: 16px; }
+}
 </style>

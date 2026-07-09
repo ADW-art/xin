@@ -55,8 +55,7 @@ def is_token_blacklisted(jti: str) -> bool:
     if not jti:
         return False
     try:
-        import redis
-        r = redis.from_url(settings.redis_url)
+        r = _get_redis()
         return bool(r.exists(f"blacklist:{jti}"))
     except Exception:
         return False  # Redis 不可用时降级为允许
@@ -75,10 +74,22 @@ def add_to_blacklist(jti: str, expire_seconds: int | None = None) -> bool:
     if not jti:
         return False
     try:
-        import redis
-        r = redis.from_url(settings.redis_url)
+        r = _get_redis()
         expire = expire_seconds or (settings.jwt_expire_minutes * 60)
         r.setex(f"blacklist:{jti}", expire, "1")
         return True
     except Exception:
         return False
+
+
+# ── 共享 Redis 连接池（供 security.py / chat.py / supervisor.py 复用）──
+import redis as _redis_mod
+_redis_pool = None
+
+
+def _get_redis():
+    """获取 Redis 客户端（复用连接池，避免每次调用创建新 TCP 连接）"""
+    global _redis_pool
+    if _redis_pool is None:
+        _redis_pool = _redis_mod.ConnectionPool.from_url(settings.redis_url, max_connections=10)
+    return _redis_mod.Redis(connection_pool=_redis_pool)

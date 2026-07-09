@@ -129,6 +129,24 @@
                 <div class="detail-subtitle">后续依赖此知识点</div>
                 <span v-for="d in selectedNode.dependents" :key="d" class="dep-tag future">{{ d }}</span>
               </div>
+              <!-- P1-16: 关联资源 -->
+              <div class="detail-resources">
+                <div class="detail-subtitle">关联资源</div>
+                <div v-if="nodeResourcesLoading" class="detail-res-loading">加载中...</div>
+                <div v-else-if="nodeResources.length === 0" class="detail-res-empty">暂无关联资源，开始学习后将自动生成</div>
+                <div v-else class="detail-res-list">
+                  <div
+                    v-for="res in nodeResources"
+                    :key="res.id"
+                    class="res-chip"
+                    @click="goToResource(res.id)"
+                  >
+                    <span class="res-chip-type" :class="res.resource_type">{{ typeLabel(res.resource_type) }}</span>
+                    <span class="res-chip-title">{{ res.title }}</span>
+                    <span class="res-chip-time">{{ fmtTime(res.created_at) }}</span>
+                  </div>
+                </div>
+              </div>
             </template>
             <div v-else class="detail-empty">点击节点查看详情</div>
           </div>
@@ -163,7 +181,7 @@
 
         <!-- Review reminders -->
         <div v-if="reviewItems.length > 0" class="kg-panel review-panel">
-          <div class="kg-panel-hd">📅 复习提醒 (艾宾浩斯)</div>
+          <div class="kg-panel-hd">复习提醒 (艾宾浩斯)</div>
           <div class="kg-panel-bd">
             <div v-for="(r, ri) in reviewItems.slice(0, 5)" :key="ri" class="review-row">
               <span class="review-concept">{{ r.concept }}</span>
@@ -177,14 +195,17 @@
         </div>
       </aside>
     </div>
-  </div>
-    <div v-show="graphMode === 'custom'" style="padding:24px">
-      <CustomGraphView />
+
+    <!-- Custom Graph -->
+    <div v-show="graphMode === 'custom'" class="kg-custom-wrap">
+      <CustomGraphView ref="customGraphRef" />
     </div>
+  </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
+import { useRouter } from 'vue-router'
 import * as echarts from 'echarts'
 import api from '@/api/index'
 import CustomGraphView from '@/views/CustomGraphView.vue'
@@ -221,10 +242,29 @@ const graphMode = ref<'system' | 'custom'>('system')
 const presentMode = ref(false)
 const loading = ref(true)
 const error = ref('')
+const customGraphRef = ref<InstanceType<typeof CustomGraphView> | null>(null)
+
+// 切换到自建图谱时自动刷新列表
+watch(graphMode, async (val) => {
+  if (val === 'custom') {
+    await nextTick()
+    customGraphRef.value?.refresh()
+  }
+})
+
 const domainName = ref('')
 const previewMode = ref(false)
 const currentDomain = ref('')
 const selectedNode = ref<KGNode | null>(null)
+
+// P1-16: 选中节点变化时加载关联资源
+watch(selectedNode, (node) => {
+  if (node && node.label) {
+    loadNodeResources(node.label)
+  } else {
+    nodeResources.value = []
+  }
+})
 const nodes = ref<KGNode[]>([])
 const phases = ref<Phase[]>([])
 const availableDomains = ref<DomainOption[]>([])
@@ -232,6 +272,43 @@ const availableDomains = ref<DomainOption[]>([])
 // ECharts 实例
 const chartRef = ref<HTMLDivElement>()
 let chartInstance: echarts.ECharts | null = null
+
+// Router for navigation
+const router = useRouter()
+
+// ═══════════ P1-16: 节点关联资源 ═══════════
+interface NodeResource {
+  id: number; title: string; resource_type: string; created_at: string | null
+}
+const nodeResources = ref<NodeResource[]>([])
+const nodeResourcesLoading = ref(false)
+
+function typeLabel(t: string): string {
+  const m: Record<string, string> = {
+    document: '文档', mindmap: '导图', question_set: '题目',
+    code_example: '代码', video_script: '脚本',
+  }
+  return m[t] || t
+}
+function fmtTime(iso: string | null): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
+}
+function goToResource(id: number) {
+  router.push(`/resources/${id}`)
+}
+async function loadNodeResources(nodeName: string) {
+  nodeResourcesLoading.value = true
+  try {
+    const res = await api.get('/path/node-resources', { params: { node_name: nodeName } })
+    nodeResources.value = res.data || []
+  } catch {
+    nodeResources.value = []
+  } finally {
+    nodeResourcesLoading.value = false
+  }
+}
 
 // ═══════════ Computed ═══════════
 const legendItems = computed(() => [
@@ -263,7 +340,16 @@ async function loadReviewData() {
       .sort((a: any, b: any) => a.retention - b.retention)
   } catch { /* non-critical */ }
 }
-onMounted(() => { loadData(); loadReviewData() })
+// 监听来自 ChatView 的路径更新事件
+function handlePathReplanned() {
+  loadData()
+  loadReviewData()
+}
+onMounted(() => {
+  loadData()
+  loadReviewData()
+  window.addEventListener('path-replanned', handlePathReplanned)
+})
 
 // ═══════════ Helpers ═══════════
 function statusLabel(s: string) {
@@ -575,6 +661,7 @@ watch(presentMode, (on) => {
 onMounted(loadData)
 onBeforeUnmount(() => {
   window.removeEventListener('resize', handleResize)
+  window.removeEventListener('path-replanned', handlePathReplanned)
   if (presentTimer !== undefined) clearInterval(presentTimer)
   if (chartInstance) { chartInstance.dispose(); chartInstance = null }
 })
@@ -690,6 +777,10 @@ onBeforeUnmount(() => {
   gap: 16px;
   position: relative;
 }
+.kg-custom-wrap {
+  flex: 1;
+  min-height: 0;
+}
 .kg-graph-wrap {
   flex: 1;
   min-height: 520px;
@@ -786,6 +877,49 @@ onBeforeUnmount(() => {
   background: #F3F4F6;
   color: #9CA3AF;
 }
+
+/* P1-16: 节点关联资源 */
+.detail-resources { margin-top: 8px; }
+.detail-res-loading { font-size: 12px; color: #9CA3AF; padding: 8px 0; }
+.detail-res-empty { font-size: 12px; color: #9CA3AF; padding: 8px 0; line-height: 1.5; }
+.detail-res-list { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.res-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: #F9FAFB;
+  border: 1px solid #E5E7EB;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.res-chip:hover { background: #EFF6FF; border-color: #93C5FD; }
+.res-chip-type {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  background: #F3F4F6;
+  color: #6B7280;
+}
+.res-chip-type.document { background: #DBEAFE; color: #1D4ED8; }
+.res-chip-type.mindmap { background: #EDE9FE; color: #7C3AED; }
+.res-chip-type.question_set { background: #FEF3C7; color: #92400E; }
+.res-chip-type.code_example { background: #D1FAE5; color: #065F46; }
+.res-chip-type.video_script { background: #FCE7F3; color: #9D174D; }
+.res-chip-title {
+  flex: 1;
+  font-size: 12px;
+  color: #374151;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.res-chip-time { flex-shrink: 0; font-size: 10px; color: #9CA3AF; }
+
 .detail-empty {
   color: #9CA3AF;
   font-size: 13px;
@@ -880,4 +1014,42 @@ onBeforeUnmount(() => {
 .tl-node-tag.unknown { background: #F3F4F6; color: #94A3B8; }
 .tl-phase-meta { font-size: 11px; color: #9CA3AF; }
 .tl-phase-meta span + span::before { content: ' · '; }
+
+/* ═══════════ Responsive ═══════════ */
+@media (max-width: 768px) {
+  .kg-center { padding: 12px; }
+  .kg-top { flex-direction: column; gap: 10px; }
+  .kg-top-r { flex-wrap: wrap; gap: 6px; }
+  .kg-top-l h1 { font-size: 18px; }
+  .kg-top-l p { font-size: 12px; }
+  .kg-legend { gap: 8px; padding: 8px 12px; margin-bottom: 10px; }
+  .legend-chip { font-size: 10px; }
+  .legend-hint { display: none; }
+  .kg-main { flex-direction: column; }
+  .kg-graph-wrap { min-height: 320px; }
+  .kg-chart { min-height: 320px; touch-action: manipulation; }
+  .kg-right { width: 100%; flex-direction: row; flex-wrap: wrap; gap: 10px; }
+  .kg-right .kg-panel { flex: 1; min-width: 200px; }
+  .kg-timeline-wrap { padding: 8px; }
+}
+
+@media (max-width: 480px) {
+  .kg-center { padding: 8px; }
+  .kg-top-l h1 { font-size: 16px; }
+  .kg-top { gap: 6px; margin-bottom: 8px; }
+  .kg-legend { gap: 4px; padding: 6px 10px; margin-bottom: 8px; }
+  .legend-chip { font-size: 9px; gap: 3px; }
+  .legend-dot { width: 8px; height: 8px; }
+  .kg-main { flex-direction: column; }
+  .kg-graph-wrap { min-height: 260px; border-radius: 8px; }
+  .kg-chart { min-height: 260px; touch-action: manipulation; }
+  .kg-right { width: 100%; flex-direction: column; gap: 8px; }
+  .kg-right .kg-panel { min-width: 0; }
+  .kg-panel-hd { font-size: 12px; padding: 8px 12px; }
+  .kg-panel-bd { padding: 10px 12px; }
+  .detail-name { font-size: 14px; }
+  .kg-stat-row { font-size: 12px; padding: 4px 0; }
+  .tl-phase-card { padding: 10px 12px; }
+  .tl-phase-title { font-size: 13px; }
+}
 </style>

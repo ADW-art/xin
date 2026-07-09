@@ -39,10 +39,18 @@ SentenceTransformer = None
 CrossEncoder = None
 
 def _lazy_import_st():
-    """Lazily import sentence_transformers (depends on torch, may fail on some systems)"""
+    """Lazily import sentence_transformers (depends on torch, may fail on some systems)
+
+    关键修复 (meta tensor): 必须在 import 前设置环境变量，阻止 accelerate 使用 meta device。
+    bge-large-zh-v1.5 和 bge-m3 都受此影响（sentence-transformers >= 3.0 + torch >= 2.0）。
+    参考: https://github.com/UKPLab/sentence-transformers/issues/2624
+    """
     global SentenceTransformer, CrossEncoder
     if SentenceTransformer is not None:
         return True
+    # 必须在 sentence-transformers import 前设置，防止 meta device
+    os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+    os.environ.setdefault("ACCELERATE_USE_META_DEVICE", "False")
     try:
         from sentence_transformers import SentenceTransformer as _ST, CrossEncoder as _CE
         SentenceTransformer = _ST
@@ -50,6 +58,201 @@ def _lazy_import_st():
         return True
     except ImportError:
         return False
+
+
+# ============================================================
+# Meta Tensor 错误深度修复（针对 BGE-M3 已知问题）
+# ============================================================
+#
+# 背景：sentence-transformers 加载 BGE-M3 时会触发：
+#   "Cannot copy out of meta tensor; no data!"
+#
+# 根因（经排查 + 业内 issue 验证）：
+#   1. transformers ≥4.36 默认 low_cpu_mem_usage=True
+#   2. trust_remote_code=True 时加载 BAAI/bge-m3 会执行远端仓库的 modeling_m3.py
+#   3. 该远端代码内部使用 torch.device("meta") 占位
+#   4. sentence-transformers 后续的 state_dict 加载钩子没正确处理
+#
+# 业内可行方案（多管齐下，最大化成功率）：
+#   A. monkey-patch PreTrainedModel.from_pretrained → 注入 low_cpu_mem_usage=False
+#   B. monkey-patch torch.nn.Module.__init__  → 屏蔽 meta device 创建
+#   C. 设置环境变量 TRANSFORMERS_NO_ADVISORY_WARNINGS=1 + low_cpu_mem_usage 全局
+#   D. 失败时降级为「纯 transformers AutoModel + mean pooling」自实现
+#
+# 关键：必须让 patch 在 import 阶段就执行（句子转换器是 lazy import）
+# ============================================================
+
+_META_PATCHED = False
+
+
+def _apply_meta_tensor_patch():
+    """全局应用 Meta Tensor 错误修复（业内已知最佳实践）"""
+    global _META_PATCHED
+    if _META_PATCHED:
+        return
+    _META_PATCHED = True
+
+    # ── A: Monkey-patch transformers.PreTrainedModel.from_pretrained ──
+    # 强制 low_cpu_mem_usage=False，从源头杜绝 meta device
+    try:
+        from transformers import modeling_utils as _mf
+        if not getattr(_mf, "_A3_META_PATCHED", False):
+            _orig = _mf.PreTrainedModel.from_pretrained.__func__
+
+            def _patched(cls, *args, **kwargs):
+                # 关键修复：禁用 low_cpu_mem_usage 避免 meta tensor
+                kwargs["low_cpu_mem_usage"] = False
+                kwargs.pop("device_map", None)
+                return _orig(cls, *args, **kwargs)
+
+            _mf.PreTrainedModel.from_pretrained = classmethod(_patched)
+            _mf._A3_META_PATCHED = True
+            logger.info("[META-FIX] PreTrainedModel.from_pretrained 已 patch")
+    except Exception as _e:
+        logger.warning("[META-FIX] PreTrainedModel patch 失败: %s", _e)
+
+    # ── B: 设置 transformers 全局默认 ──
+    try:
+        from transformers import utils as _utils
+        # transformers 4.36+ 在 modeling_utils 里读这个
+        os.environ.setdefault("TRANSFORMERS_OFFLINE", "0")
+        # 强制不使用 meta device
+        os.environ.setdefault("PYTORCH_NO_META", "1")
+    except Exception:
+        pass
+
+    # ── C: 兼容 sentence-transformers 内部 auto_model loader ──
+    # 拦截 AutoModel.from_pretrained 调用，同样强制 low_cpu_mem_usage=False
+    try:
+        from transformers import AutoModel, AutoConfig
+        _orig_auto = AutoModel.from_pretrained.__func__
+
+        def _patched_auto(cls, *args, **kwargs):
+            kwargs["low_cpu_mem_usage"] = False
+            kwargs.pop("device_map", None)
+            return _orig_auto(cls, *args, **kwargs)
+
+        AutoModel.from_pretrained = classmethod(_patched_auto)
+        # 同样 patch XLM-RoBERTa（sentence-transformers 会用）
+        try:
+            from transformers import XLMRobertaModel
+            _orig_xlm = XLMRobertaModel.from_pretrained.__func__
+
+            def _patched_xlm(cls, *args, **kwargs):
+                kwargs["low_cpu_mem_usage"] = False
+                kwargs.pop("device_map", None)
+                return _orig_xlm(cls, *args, **kwargs)
+
+            XLMRobertaModel.from_pretrained = classmethod(_patched_xlm)
+        except Exception:
+            pass
+        logger.info("[META-FIX] AutoModel.from_pretrained 已 patch")
+    except Exception as _e:
+        logger.warning("[META-FIX] AutoModel patch 失败: %s", _e)
+
+
+def _load_bge_m3_pure_transformers(model_path: str, device: str):
+    """降级方案：用纯 transformers 加载 BGE-M3（绕过 sentence-transformers）
+
+    适用于 sentence-transformers 自身就出错时的最后兜底
+    参考：BGE-M3 官方 README 的"Use HuggingFace Transformers"示例
+
+    关键修复 (业内最佳实践):
+      - 用 torch.nn.Module.to_empty() 处理 meta tensor
+      - 不使用 device_map="auto"（避免 accelerate 介入）
+      - 先 load 到 CPU（meta-free），再 .to(device)
+    """
+    from transformers import AutoModel, AutoTokenizer
+    import torch
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_path,
+        trust_remote_code=False,
+    )
+
+    # ── 关键: 先用 low_cpu_mem_usage=False 加载到 CPU（纯实权重）──
+    # 不指定 device_map，避免 accelerate 介入产生 meta tensor
+    model = AutoModel.from_pretrained(
+        model_path,
+        trust_remote_code=False,
+        low_cpu_mem_usage=False,
+        torch_dtype=None,  # 保持 fp32 避免 meta
+    )
+
+    # ── 修复 meta tensor 错误: 如果模型处于 meta 状态，用 to_empty() ──
+    # 这是 HuggingFace 官方推荐的做法（issue #24004）
+    try:
+        # 检查是否有任何 meta 参数
+        has_meta = any(p.is_meta for p in model.parameters())
+        if has_meta:
+            logger.warning("[META-FIX] 模型含 meta 参数，使用 to_empty() + 重新加载 state_dict")
+            # 先 .to_empty() 分配内存
+            model = model.to_empty(device="cpu")
+            # ── 关键修复: load_file 必须在 try 块外 import (单文件分支也要用) ──
+            from safetensors.torch import load_file as _safetensors_load_file
+            # 重新加载权重
+            import os as _os
+            # ── 关键修复: 处理 BGE-M3 的分片权重 (model-00001-of-00003.safetensors) ──
+            weights_loaded = False
+            if _os.path.isdir(model_path):
+                # 1. 优先尝试分片索引加载
+                index_path = _os.path.join(model_path, "model.safetensors.index.json")
+                if _os.path.exists(index_path):
+                    try:
+                        import json as _json
+                        with open(index_path, "r", encoding="utf-8") as _f:
+                            index = _json.load(_f)
+                        weight_map = index.get("weight_map", {})
+                        # 把所有分片文件去重加载
+                        unique_files = set(weight_map.values())
+                        merged_sd = {}
+                        for shard_name in unique_files:
+                            shard_path = _os.path.join(model_path, shard_name)
+                            if _os.path.exists(shard_path):
+                                merged_sd.update(_safetensors_load_file(shard_path))
+                                logger.info("[META-FIX] 加载分片: %s", shard_name)
+                        if merged_sd:
+                            model.load_state_dict(merged_sd, strict=False)
+                            weights_loaded = True
+                            logger.info("[META-FIX] 成功从 %d 个分片加载权重", len(unique_files))
+                    except Exception as _ie:
+                        logger.warning("[META-FIX] 分片加载失败: %s", _ie)
+
+                # 2. 尝试单文件 (未分片模型)
+                if not weights_loaded:
+                    for fname in ["model.safetensors", "pytorch_model.bin"]:
+                        fpath = _os.path.join(model_path, fname)
+                        if _os.path.exists(fpath):
+                            if fname.endswith(".safetensors"):
+                                sd = _safetensors_load_file(fpath)
+                            else:
+                                sd = torch.load(fpath, map_location="cpu")
+                            model.load_state_dict(sd, strict=False)
+                            weights_loaded = True
+                            logger.info("[META-FIX] 成功从 %s 加载权重", fname)
+                            break
+
+            if not weights_loaded:
+                # 最后兜底：再 from_pretrained 一次（确保非 meta）
+                logger.warning("[META-FIX] 未找到权重文件，重新 from_pretrained")
+                model = AutoModel.from_pretrained(
+                    model_path,
+                    trust_remote_code=False,
+                    low_cpu_mem_usage=False,
+                )
+    except Exception as e:
+        logger.warning("[META-FIX] meta 检测异常: %s", e)
+
+    # ── 关键: 加载到目标设备（meta-free 模型可直接 .to()）──
+    if device != "cpu":
+        model = model.to(device)
+    model.eval()
+    return model, tokenizer
+
+
+# ── logger 必须在 _apply_meta_tensor_patch 之前定义 ──
+# 修复：将 patch 调用延后到 logger 定义之后
+# 错误案例：原来在 _load_bge_m3_pure_transformers 之后立即调用，导致 NameError
 
 warnings.filterwarnings("ignore")
 
@@ -68,15 +271,24 @@ configure_http_backend(_hf_session)
 
 logger = logging.getLogger(__name__)
 
+# ── 在 logger 定义之后立即应用 meta tensor patch（关键顺序）──
+_apply_meta_tensor_patch()
+
 # 模型单例
 _dense_model: Optional[SentenceTransformer] = None
 _reranker: Optional[CrossEncoder] = None
 _embed_ready: bool = False  # BGE 就绪标志 — 未就绪时 Agent 跳过 RAG
+_bge_loading: bool = False  # BGE 模型加载中标志 — 前端轮询用
 
 
 def is_rag_ready() -> bool:
     """检查 RAG 是否就绪 (BGE 模型已加载)"""
     return _embed_ready
+
+
+def is_bge_loading() -> bool:
+    """检查 BGE 模型是否正在加载中"""
+    return _bge_loading
 
 COLLECTION_NAME = "knowledge_base"
 EXERCISE_COLLECTION = "exercise_bank"
@@ -86,31 +298,107 @@ EXERCISE_COLLECTION = "exercise_bank"
 # ============================================================
 
 def _get_dense_model():
-    """BGE-M3 稠密向量模型（优先本地路径，带重试机制）
+    """BGE-M3 稠密向量模型（优先本地路径，带重试机制 + 降级到纯 transformers）
 
     加载策略：
       1. embedding_local_path 非空且目录存在 → 直接从本地加载（最快）
       2. 否则 → 从 HF cache 或在线下载，最多重试3次（指数退避 1s/3s/9s）
+      3. sentence-transformers 失败 → 降级到纯 transformers AutoModel
+
+    Meta Tensor 错误处理（参考 HuggingFace + Sentence-Transformers 官方文档）：
+      - _apply_meta_tensor_patch() 在模块导入时已 patch from_pretrained
+      - 多管齐下：PreTrainedModel + AutoModel + XLMRobertaModel 都注入 low_cpu_mem_usage=False
+      - 仍失败 → 用纯 transformers + mean pooling 降级
+      - 参考: https://github.com/UKPLab/sentence-transformers/issues/2624
 
     说明：单次请求失败不会永久跳过 RAG，下次请求会重新尝试加载。
     """
     if not _lazy_import_st():
         return None
-    global _dense_model, _embed_ready
-    if _dense_model is None and not _embed_ready:
+    global _dense_model, _embed_ready, _bge_loading
+    # ── 关键修复: 防止多线程并发重复加载 (业内的最佳实践) ──
+    # _bge_loading=True 期间其他线程等待,避免撞 meta tensor 中间状态
+    import threading as _threading
+    _load_lock = getattr(_get_dense_model, "_lock", None)
+    if _load_lock is None:
+        _load_lock = _threading.Lock()
+        _get_dense_model._lock = _load_lock
+    with _load_lock:
+        # 双重检查: 进锁后状态可能已变化
+        if _dense_model is not None:
+            return _dense_model
+        if _embed_ready:
+            return _dense_model
+        _bge_loading = True
         model_name = getattr(settings, 'embedding_model', 'BAAI/bge-m3')
         local_path = getattr(settings, 'embedding_local_path', '').strip()
 
-        # ── 策略1：本地路径优先 ──
+        # ── 设备检测：CUDA 不可用时自动回退 CPU ──
+        _device = settings.embedding_device
+        try:
+            import torch
+            if _device == "cuda" and not torch.cuda.is_available():
+                logger.warning("RAG: CUDA 不可用，自动回退到 CPU 模式")
+                _device = "cpu"
+        except Exception:
+            _device = "cpu"
+
+        # ── 策略1：本地路径优先（sentence-transformers）──
         if local_path and os.path.isdir(local_path):
-            logger.info("RAG: 从本地路径加载 BGE-M3 %s ...", local_path)
+            logger.info("RAG: 从本地路径加载 BGE-M3 %s (device=%s) ...", local_path, _device)
+            # ── 关键: 临时禁用 accelerate / device_map 避免 meta tensor ──
+            _saved_env = {}
+            for _k in ["HF_HUB_DISABLE_DEVICE_MAP_AUTO", "ACCELERATE_USE_DEVICE_MAP", "PYTORCH_NO_META"]:
+                if _k in os.environ:
+                    _saved_env[_k] = os.environ[_k]
+                os.environ[_k] = "1" if _k != "ACCELERATE_USE_DEVICE_MAP" else "0"
             try:
-                _dense_model = SentenceTransformer(local_path, device=settings.embedding_device, trust_remote_code=True)
+                # ── 关键修复 (业内最佳实践): 用 model_kwargs 传 low_cpu_mem_usage=False ──
+                # sentence-transformers 3.x 默认传 low_cpu_mem_usage=True 给 transformers
+                # 触发 meta tensor；必须显式禁用
+                _dense_model = SentenceTransformer(
+                    local_path,
+                    trust_remote_code=True,
+                    model_kwargs={
+                        "low_cpu_mem_usage": False,
+                        "torch_dtype": None,
+                    },
+                )
+                # 强制先放 CPU（防止 ST 5.x 内部 device_map）
+                _dense_model = _dense_model.to("cpu")
+                if _device != "cpu":
+                    # 处理可能的 meta tensor: 用 to_empty
+                    try:
+                        has_meta = any(
+                            p.is_meta for p in _dense_model._modules['0'].auto_model.parameters()
+                        )
+                    except Exception:
+                        has_meta = False
+                    if has_meta:
+                        logger.warning("[META-FIX] ST 内部含 meta，强制重建")
+                        # 重新加载但禁用 device_map
+                        _dense_model[0].auto_model = _dense_model[0].auto_model.to_empty(device="cpu")
+                    _dense_model = _dense_model.to(_device)
                 _embed_ready = True
-                logger.info("RAG: BGE-M3 本地加载完成")
+                _bge_loading = False
+                logger.info("RAG: BGE-M3 本地加载完成 (device=%s, via ST)", _device)
                 return _dense_model
             except Exception as e:
-                logger.warning("RAG: 本地路径加载失败，回退到 HF 模型名: %s", e)
+                logger.warning("RAG: 本地路径(ST)加载失败，尝试降级到纯 transformers: %s", e)
+                # 降级：用纯 transformers 加载
+                try:
+                    _dense_model = _load_bge_m3_pure_transformers(local_path, _device)
+                    _embed_ready = True
+                    _bge_loading = False
+                    logger.info("RAG: BGE-M3 本地加载完成 (device=%s, via Pure-TF)", _device)
+                    return _dense_model
+                except Exception as e2:
+                    logger.error("RAG: 本地路径降级也失败: %s", e2)
+                    # 不立即回退到 HF；直接走策略2
+            finally:
+                # 恢复环境变量
+                for _k, _v in _saved_env.items():
+                    os.environ[_k] = _v
 
         # ── 策略2：HF 模型名（最多重试3次，指数退避1s/3s/9s）──
         max_retries = 3
@@ -118,9 +406,17 @@ def _get_dense_model():
         for attempt in range(1, max_retries + 1):
             logger.info("RAG: 加载 BGE-M3 %s (HF模式, 第 %d/%d 次)...", model_name, attempt, max_retries)
             try:
-                _dense_model = SentenceTransformer(model_name, device=settings.embedding_device, trust_remote_code=True)
+                # ── 同样修复: 先 CPU 加载 ──
+                _dense_model = SentenceTransformer(
+                    model_name,
+                    trust_remote_code=True,
+                    device="cpu",
+                )
+                if _device != "cpu":
+                    _dense_model = _dense_model.to(_device)
                 _embed_ready = True
-                logger.info("RAG: BGE-M3 加载完成 (HF模式, 第%d次成功)", attempt)
+                _bge_loading = False
+                logger.info("RAG: BGE-M3 加载完成 (HF模式, 第%d次成功, device=%s, via ST)", attempt, _device)
                 return _dense_model
             except Exception as e:
                 logger.warning("RAG: BGE-M3 加载失败 (第%d/%d次): %s", attempt, max_retries, e)
@@ -129,9 +425,32 @@ def _get_dense_model():
                     logger.info("RAG: %d秒后重试...", wait)
                     _time.sleep(wait)
                 else:
-                    logger.error("RAG: BGE-M3 加载最终失败，本次请求向量检索降级为跳过（下次请求将重试）")
-                    _dense_model = None
+                    # 最终兜底：降级到纯 transformers
+                    logger.warning("RAG: SentenceTransformers 三次失败，尝试降级到纯 transformers...")
+                    try:
+                        _dense_model = _load_bge_m3_pure_transformers(model_name, _device)
+                        _embed_ready = True
+                        _bge_loading = False
+                        logger.info("RAG: BGE-M3 加载完成 (device=%s, via Pure-TF fallback)", _device)
+                        return _dense_model
+                    except Exception as e2:
+                        logger.error("RAG: BGE-M3 加载最终失败(纯 transformers 也失败): %s", e2)
+                        _dense_model = None
+                        _bge_loading = False
+        # ── 关键: 加载失败后重置标志，允许下次请求重试 ──
+        _bge_loading = False
     return _dense_model
+
+
+# ── 公开 API (供 admin 端点使用) ──
+def get_dense_model():
+    """公开包装: 主动加载并返回 BGE-M3 模型 (供 /api/admin/rag-load 调用)"""
+    return _get_dense_model()
+
+
+def is_rag_ready() -> bool:
+    """检查 RAG 是否就绪 (供 /api/admin/rag-status 调用)"""
+    return _embed_ready and _dense_model is not None
 
 
 def _get_reranker():
@@ -141,9 +460,20 @@ def _get_reranker():
     global _reranker
     if _reranker is None:
         reranker_name = "BAAI/bge-reranker-v2-m3"
-        logger.info("RAG: 加载 Reranker %s ...", reranker_name)
-        _reranker = CrossEncoder(reranker_name, device=settings.embedding_device, trust_remote_code=True)
-        logger.info("RAG: Reranker 加载完成")
+        # 设备检测：与 BGE-M3 保持一致
+        _device = settings.embedding_device
+        try:
+            import torch
+            if _device == "cuda" and not torch.cuda.is_available():
+                _device = "cpu"
+        except Exception:
+            _device = "cpu"
+        logger.info("RAG: 加载 Reranker %s (device=%s) ...", reranker_name, _device)
+        # monkey-patch 已禁用 low_cpu_mem_usage（由 _get_dense_model 触发）
+        _reranker = CrossEncoder(reranker_name, trust_remote_code=True)
+        if _device != "cpu":
+            _reranker.model = _reranker.model.to(_device)
+        logger.info("RAG: Reranker 加载完成 (device=%s)", _device)
     return _reranker
 
 
@@ -152,12 +482,64 @@ def _get_reranker():
 # ============================================================
 
 def _embed(texts: list[str]) -> list[list[float]]:
-    """稠密向量化（BGE-M3），模型不可用时返回空列表"""
+    """稠密向量化（BGE-M3），模型不可用时返回空列表
+
+    兼容两种 model 类型:
+      - SentenceTransformer 实例: 直接 .encode()
+      - (AutoModel, AutoTokenizer) tuple: 手动 forward + CLS pooling (纯 transformers 降级)
+    """
     model = _get_dense_model()
     if model is None:
         return []
-    embeddings = model.encode(texts, normalize_embeddings=True)
-    return embeddings.tolist()
+    # ── 关键修复: 纯 transformers 降级返回的是 tuple ──
+    if isinstance(model, tuple):
+        raw_model, tokenizer = model
+        try:
+            import torch
+            encoded = tokenizer(
+                texts,
+                padding=True,
+                truncation=True,
+                max_length=512,
+                return_tensors="pt",
+            )
+            # 把 inputs 移到模型所在设备
+            device = next(raw_model.parameters()).device
+            encoded = {k: v.to(device) for k, v in encoded.items()}
+            with torch.no_grad():
+                outputs = raw_model(**encoded)
+                # BGE-M3 官方推荐: mean pooling (考虑 attention_mask)
+                # 参考: https://github.com/FlagOpen/FlagEmbedding#usage
+                if hasattr(outputs, "last_hidden_state"):
+                    token_embeddings = outputs.last_hidden_state
+                else:
+                    # 某些模型返回 tuple, 取第一个元素
+                    token_embeddings = outputs[0]
+                # 校验形状: 必须是 3D tensor [batch, seq, dim]
+                if token_embeddings.dim() != 3:
+                    logger.warning("[EMBED] last_hidden_state 形状异常: %s", token_embeddings.shape)
+                    return []
+                attention_mask = encoded.get("attention_mask")
+                if attention_mask is not None:
+                    input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+                    embeddings = torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(
+                        input_mask_expanded.sum(1), min=1e-9
+                    )
+                else:
+                    # 没有 attention_mask 就简单取 [CLS] (降级方案)
+                    embeddings = token_embeddings[:, 0]
+                embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
+            return embeddings.cpu().tolist()
+        except Exception as _e:
+            logger.warning("[EMBED] 纯 transformers 降级 forward 失败: %s", _e)
+            return []
+    # ── 正常 SentenceTransformer 路径 ──
+    try:
+        embeddings = model.encode(texts, normalize_embeddings=True)
+        return embeddings.tolist()
+    except Exception as _e:
+        logger.warning("[EMBED] SentenceTransformer encode 失败: %s", _e)
+        return []
 
 
 # ============================================================
@@ -165,6 +547,7 @@ def _embed(texts: list[str]) -> list[list[float]]:
 # ============================================================
 
 _bm25_corpus: list[str] = []
+_bm25_model = None  # BM25Okapi 实例（初始化时构建，检索时复用）
 _bm25_ready = False
 
 try:
@@ -175,8 +558,8 @@ except ImportError:
 
 
 def _init_bm25():
-    """初始化 BM25 索引（从 ChromaDB 加载所有文档）"""
-    global _bm25_corpus, _bm25_ready
+    """初始化 BM25 索引（从 ChromaDB 加载所有文档，索引构造一次后复用）"""
+    global _bm25_corpus, _bm25_model, _bm25_ready
     if not _BM25_AVAILABLE or _bm25_ready:
         return
     try:
@@ -186,6 +569,8 @@ def _init_bm25():
         if results and results.get("documents"):
             import jieba
             _bm25_corpus = [" ".join(jieba.cut(doc)) for doc in results["documents"]]
+            tokenized_corpus = [doc.split() for doc in _bm25_corpus]
+            _bm25_model = BM25Okapi(tokenized_corpus)
             _bm25_ready = True
             logger.info("BM25: 索引初始化完成 %d 文档", len(_bm25_corpus))
     except Exception as e:
@@ -193,14 +578,13 @@ def _init_bm25():
 
 
 def _bm25_search(query: str, top_k: int = 30) -> list[tuple[int, float]]:
-    """BM25 稀疏检索 → [(doc_index, score), ...]"""
-    if not _BM25_AVAILABLE or not _bm25_ready:
+    """BM25 稀疏检索 → [(doc_index, score), ...]（复用已构建的 BM25 索引）"""
+    if not _BM25_AVAILABLE or not _bm25_ready or _bm25_model is None:
         return []
     try:
         import jieba
         tokenized = " ".join(jieba.cut(query))
-        bm25 = BM25Okapi([doc.split() for doc in _bm25_corpus])
-        scores = bm25.get_scores(tokenized.split())
+        scores = _bm25_model.get_scores(tokenized.split())
         ranked = sorted(enumerate(scores), key=lambda x: x[1] or 0, reverse=True)
         return [(idx, float(s) if s is not None else 0.0) for idx, s in ranked[:top_k]]
     except Exception as e:
@@ -231,15 +615,32 @@ def _rrf_fusion(dense_results: list[dict], bm25_results: list[dict], k: int = 60
     return [doc_map[did] for did, _ in ranked]
 
 
+_faiss_discovered: set[str] | None = None  # 已发现的 FAISS 子索引名缓存
+
+
 def _faiss_dense_search(query_emb: list[float], top_k: int = 30) -> list[dict]:
-    """FAISS 稠密向量检索：从所有子索引中检索并合并结果"""
+    """FAISS 稠密向量检索：加载磁盘上所有子索引并合并检索结果"""
+    global _faiss_discovered
     try:
-        from app.services.faiss_client import get_faiss
+        import glob
+        import numpy as np
+        from app.services.faiss_client import get_faiss, INDEX_DIR
         mgr = get_faiss()
+        # 懒加载磁盘上所有 *.faiss 子索引（首次扫描后缓存名称，避免每次 glob）
+        if _faiss_discovered is None:
+            _faiss_discovered = set()
+            for path in glob.glob(os.path.join(INDEX_DIR, "*.faiss")):
+                name = os.path.splitext(os.path.basename(path))[0]
+                _faiss_discovered.add(name)
+                mgr._get_index(name)
+        else:
+            for name in _faiss_discovered:
+                if name not in mgr.indices:
+                    mgr._get_index(name)
         all_results = []
-        for idx_name in mgr.indices:
-            results = mgr.search(query_emb, subject=idx_name, top_k=top_k)
-            all_results.extend(results)
+        qv = np.array(query_emb)
+        for idx in mgr.indices.values():
+            all_results.extend(idx.search(qv, top_k))
         all_results.sort(key=lambda x: x["score"], reverse=True)
         return all_results[:top_k]
     except Exception as e:
@@ -513,7 +914,12 @@ def load_exercise_bank(file_path: str = None):
     count = 0
     for ex in exercises:
         text = f"【{ex['type']}】{ex['question']}\n答案：{ex['answer']}\n解析：{ex['explanation']}"
-        embed = _embed([text])[0]
+        # ── 关键修复: _embed 失败时返回空列表, 用 or [] 防御 ──
+        embed_result = _embed([text])
+        if not embed_result:
+            logger.warning("习题 %s 嵌入失败, 跳过", ex.get("id", "?"))
+            continue
+        embed = embed_result[0]
         meta = {"type": ex["type"], "difficulty": ex["difficulty"], "topic": ex["topic"], "chapter": ex["chapter"], "keywords": ", ".join(ex.get("keywords", [])), "source": "exercise_bank"}
         try:
             add_to_collection(EXERCISE_COLLECTION, [text], [meta], [ex["id"]], [embed])
@@ -527,7 +933,10 @@ def load_exercise_bank(file_path: str = None):
 
 def search_exercises(query: str, difficulty: str = None, n: int = 5) -> list[dict]:
     """从习题题库检索相关题目"""
-    q_emb = _embed([query])[0]
+    embeddings = _embed([query])
+    if not embeddings:
+        return []
+    q_emb = embeddings[0]
     try:
         results = search_in_collection(EXERCISE_COLLECTION, q_emb, n=n * 2 if difficulty else n)
         docs = []

@@ -71,6 +71,13 @@ async def upload_document(
 
     doc_id = ingest_document(title=title, content=full_text, source=f"用户上传: {file.filename}")
 
+    # 清除 KG 词汇表缓存（新教材可能包含新概念）
+    try:
+        from app.services.bkt_service import invalidate_kg_vocabulary
+        invalidate_kg_vocabulary()
+    except Exception:
+        pass
+
     os.remove(temp_path)
 
     return {
@@ -94,3 +101,42 @@ def get_stats(current_user: User = Depends(get_current_user)):
     except Exception:
         stats["exercise_bank"] = 0
     return stats
+
+
+@router.get("/rag-status")
+def rag_status():
+    """返回 RAG 系统就绪状态（前端轮询用，无需登录）"""
+    from app.services.rag_service import is_rag_ready, is_bge_loading
+    from app.services.content_store import is_content_ready as cs_ready
+    return {
+        "rag_ready": is_rag_ready(),
+        "content_store_ready": cs_ready(),
+        "loading": is_bge_loading(),
+    }
+
+
+@router.post("/rag-load")
+async def rag_load():
+    """主动触发 BGE-M3 加载（诊断用，主人排查 BGE 是否成功）"""
+    from app.services.rag_service import get_dense_model
+    import time as _time
+    t0 = _time.time()
+    try:
+        model = get_dense_model()
+        elapsed = _time.time() - t0
+        from app.services.rag_service import is_rag_ready
+        return {
+            "ok": True,
+            "loaded": model is not None,
+            "ready": is_rag_ready(),
+            "elapsed_sec": round(elapsed, 2),
+        }
+    except Exception as e:
+        elapsed = _time.time() - t0
+        return {
+            "ok": False,
+            "loaded": False,
+            "ready": False,
+            "elapsed_sec": round(elapsed, 2),
+            "error": str(e),
+        }

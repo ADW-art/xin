@@ -163,13 +163,20 @@ class RateLimiter:
 
     # ── Redis Backend (Sorted Set 滑动窗口) ─────────────────
 
+    # Redis 连接池（模块级单例，复用连接）
+    _redis_pool = None
+
     def _get_redis(self):
-        """获取 Redis 连接。不可用时返回 None。首次连接后缓存可用性状态。"""
+        """获取 Redis 连接（复用连接池）。不可用时返回 None。首次连接后缓存可用性状态。"""
         if self._redis_available is False:
             return None
         try:
             import redis
-            r = redis.from_url(settings.redis_url)
+            if RateLimiter._redis_pool is None:
+                RateLimiter._redis_pool = redis.ConnectionPool.from_url(
+                    settings.redis_url, max_connections=20
+                )
+            r = redis.Redis(connection_pool=RateLimiter._redis_pool)
 
             if self._redis_available is None:
                 r.ping()

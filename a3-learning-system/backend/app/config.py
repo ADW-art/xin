@@ -59,9 +59,9 @@ class Settings(BaseSettings):
     # BGE
     hf_mirror: str = "https://hf-mirror.com"  # 设为空字符串 "" 使用官方 HuggingFace
     embedding_model: str = "BAAI/bge-m3"
-    embedding_device: str = "cpu"
+    embedding_device: str = "cuda"
     # 本地模型路径（优先于在线下载，设为空则自动从 HF 下载/缓存加载）
-    embedding_local_path: str = ""
+    embedding_local_path: str = "models/bge-large-zh-v1.5"
 
     # LangGraph 持久化
     checkpoint_db_path: str = "./data/checkpoints.db"

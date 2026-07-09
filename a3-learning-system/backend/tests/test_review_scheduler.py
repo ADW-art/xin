@@ -41,7 +41,7 @@ class TestReviewScheduleBasics:
         assert s.last_reviewed is None
         assert s.review_count == 0
         assert s.interval_index == 0
-        assert s.memory_strength == 0.5
+        assert s.memory_strength == 4.0
 
     def test_initial_retention_is_zero(self):
         """从未复习过的知识点，记忆保留率应为 0.0。"""
@@ -119,12 +119,12 @@ class TestReviewScheduleBasics:
             )
 
     def test_memory_strength_cap(self):
-        """memory_strength 不应超过 2.0 的上界。"""
+        """memory_strength 不应超过 20.0 的上界。"""
         s = ReviewSchedule("concept")
-        for _ in range(20):
+        for _ in range(30):
             s.review()
-        assert s.memory_strength <= 2.0, (
-            f"memory_strength 应 ≤ 2.0，实际: {s.memory_strength}"
+        assert s.memory_strength <= 20.0, (
+            f"memory_strength 应 ≤ 20.0，实际: {s.memory_strength}"
         )
 
 
@@ -264,18 +264,21 @@ class TestReviewScheduler:
     def test_record_answer_correct_triggers_review(self):
         """答对 = 有效复习，应触发 review。"""
         scheduler = ReviewScheduler()
-        scheduler.record_answer("python", is_correct=True)
-        s = scheduler.schedules["python"]
+        # 使用不会被规范化的测试概念名，确保 lookup key 一致
+        test_concept = "test_unique_concept"
+        scheduler.record_answer(test_concept, is_correct=True)
+        s = scheduler.schedules[test_concept]
         assert s.review_count == 1
 
     def test_record_answer_wrong_no_review(self):
         """答错不应触发复习，但概念会被记录。"""
         scheduler = ReviewScheduler()
-        # record_answer 在答错时不会调用 get_or_create，需要先手动创建
-        s = scheduler.get_or_create("python")
+        # 使用不会被规范化的测试概念名
+        test_concept = "test_unique_concept_wrong"
+        s = scheduler.get_or_create(test_concept)
         s.review()  # 复习一次，设置 initial state
         prev_count = s.review_count
-        scheduler.record_answer("python", is_correct=False)
+        scheduler.record_answer(test_concept, is_correct=False)
         # 答错不会增加 review_count
         assert s.review_count == prev_count
 

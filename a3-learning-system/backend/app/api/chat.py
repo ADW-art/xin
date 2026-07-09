@@ -17,22 +17,27 @@ from pydantic import BaseModel, Field, field_validator
 from langchain_core.messages import HumanMessage
 
 from app.core.database import get_session
-from app.core.shared_utils import _normalize_concept_name, _build_llm_messages, _structure_knowledge_base
+from app.core.shared_utils import _build_llm_messages
 from app.core.security import decode_access_token
 from app.core.sanitize import sanitize_input
 from app.models.profile import LearningProfile
 from app.models.user import User
 from app.models.conversation import Conversation
-from app.models.resource import Resource
-from app.models.assessment import AssessmentReport
-from app.models.learning_path import LearningPath
 from app.dependencies import get_graph, get_spark_client
+from app.services.agent_persistence import _persist_agent_output
+from app.services.event_hooks import _post_agent_event_hook, _store_suggestion, _get_agent_suggestion_text
+from app.services.profile_collect import _silent_profile_collect
+from app.services.knowledge_boost import _extract_and_boost
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/chat", tags=["对话"])
 
 _SENTINEL = object()
+
+# Shared thread pool for bridging sync LLM calls to async event stream.
+# Avoids creating a new executor thread per SSE request (Issue #3).
+_bridge_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="bridge_")
 
 
 # ============================================================
@@ -88,534 +93,88 @@ def _optional_user(authorization: str | None = Header(None)):
         return user
 
 
-def _persist_agent_output(agent_name: str, content: str, user_id: int, agent_outputs: dict):
-    """将 Agent 生成的完整内容写入对应数据表 + 回写画像反馈
+def _generate_learning_summary(user_id: int, agent_name: str, agent_outputs: dict) -> str | None:
+    """在 teaching/evaluation session 之后自动生成结构化"学习小结"。
 
-    增强: 当 agent_name 不匹配时，遍历 agent_outputs 查找实际产生输出的 Agent
+    触发条件：Agent 为 resource_agent / question_agent / evaluation_agent /
+    collaborative_resource / collaborative_qa 时。
+
+    返回 Markdown 文本（blockquote 格式），可直接追加到 assistant 消息尾部；
+    不适用时返回 None。
     """
-    if not user_id or not content:
-        return
-
-    # 如果 agent_name 不是已知 worker agent，尝试从 agent_outputs 推断
-    worker_agents = {"resource_agent", "evaluation_agent", "path_agent", "question_agent", "profile_agent"}
-    if agent_name not in worker_agents:
-        # 从 agent_outputs 中找到有实际输出的 agent
-        for key in agent_outputs:
-            if key in worker_agents:
-                logger.info("Persist: agent_name '%s' → 从 agent_outputs 推断为 '%s'", agent_name, key)
-                agent_name = key
-                break
-
-    boosted_topic: str = ""
-    try:
-        with get_session() as db:
-            if agent_name == "resource_agent":
-                meta = agent_outputs.get("resource_agent", {})
-                title = meta.get("title") or meta.get("topic", "")
-                resource_type = meta.get("type", "document")
-                r = Resource(user_id=user_id, resource_type=resource_type,
-                            title=title, content=content, generated_by="resource_agent")
-                db.add(r)
-                db.flush()
-                logger.info("Persist: 资源已入库 id=%d type=%s title='%s' chars=%d",
-                            r.id, resource_type, title, len(content))
-                if meta:
-                    meta["db_id"] = r.id
-                if title:
-                    _boost_knowledge_score(db, user_id, title)
-                    boosted_topic = title
-            elif agent_name == "evaluation_agent":
-                eval_meta = agent_outputs.get("evaluation_agent", {})
-                ds = eval_meta.get("dimension_scores", {})
-                if not ds:
-                    profile = _load_profile(user_id)
-                    ds = profile.get("dimension_scores") if profile else {}
-                r = AssessmentReport(user_id=user_id, report_type="progress",
-                                    report_data={"content": content},
-                                    dimension_scores=ds or {},
-                                    suggestions=[])
-                db.add(r)
-            elif agent_name == "path_agent":
-                r = LearningPath(user_id=user_id,
-                               path_data={"content": content,
-                                         "topic": agent_outputs.get("path_agent", {}).get("topic", "")},
-                               status="active")
-                db.add(r)
-            elif agent_name == "question_agent":
-                meta = agent_outputs.get("question_agent", {})
-                # 出题模式：缓存完整题目文本，供下次评阅使用
-                # (Agent 不自行调用 LLM，完整文本在此处获取后写入缓存)
-                if meta.get("mode") == "generate" and content:
-                    try:
-                        from app.agents.question_agent import cache_questions_text
-                        cache_questions_text(user_id, content)
-                    except Exception as e:
-                        logger.warning("缓存题目文本失败: %s", e)
-                # 评阅模式：解析 LLM 批改结果 → 逐题更新 BKT → 同步回 Profile
-                elif meta.get("mode") == "grade" and content:
-                    topic = meta.get("topic", "")
-                    if topic:
-                        try:
-                            from app.agents.question_agent import parse_grading_result
-                            from app.services.bkt_service import get_tracker, sync_bkt_to_profile
-
-                            result = parse_grading_result(content)
-                            per_question = result.get("per_question", [])
-                            correct_count = result.get("correct_count", 0)
-                            total_count = result.get("total_count", 0)
-
-                            if per_question and total_count > 0:
-                                tracker = get_tracker(user_id)
-                                for is_correct in per_question:
-                                    tracker.record_answer(topic, correct=is_correct)
-                                tracker.persist_to_db()
-                                logger.info(
-                                    "BKT评分闭环: topic='%s' %d/%d correct → p_known=%.3f [%s]",
-                                    topic, correct_count, total_count,
-                                    tracker.get_or_create(topic).p_known,
-                                    tracker.get_or_create(topic).level,
-                                )
-                                # 回写 Profile: BKT 后验概率 → knowledge_base 分数
-                                sync_bkt_to_profile(user_id)
-                            elif total_count > 0:
-                                # 解析出汇总但无逐题明细，用聚合准确率更新
-                                from app.services.bkt_service import get_tracker, sync_bkt_to_profile
-                                tracker = get_tracker(user_id)
-                                accuracy = correct_count / total_count
-                                tracker.record_answer(topic, correct=accuracy >= 0.6)
-                                tracker.persist_to_db()
-                                sync_bkt_to_profile(user_id)
-                        except Exception as e:
-                            logger.warning("BKT评分闭环执行失败: %s", e)
-        # commit 已完成（get_session 退出时自动 commit）
-        # 将资源生成新增的知识点同步到 BKT 作为先验
-        if boosted_topic:
-            try:
-                from app.services.bkt_service import sync_profile_to_bkt
-                kb_sync = _load_profile(user_id)
-                if kb_sync:
-                    sync_profile_to_bkt(user_id, kb_sync.get("knowledge_base", {}))
-            except Exception as _e:
-                logger.warning("Profile→BKT 资源同步失败: %s", _e)
-    except Exception as e:
-        logger.warning("持久化 %s 输出失败: %s", agent_name, e)
-
-
-# ═══════════════════════════════════════════════════════════════
-# v3: 画像事件驱动闭环 — Agent 完成后自动触发下游操作
-# ═══════════════════════════════════════════════════════════════
-
-def _post_agent_event_hook(agent_name: str, user_id: int, agent_outputs: dict):
-    """Agent 完成后的自动联动: 评估→重规划, BKT变化→重评估
-
-    参考: LangGraph HITL pattern + 教育系统 event-driven assessment
-    """
-    if not user_id:
-        return
+    if agent_name not in ("resource_agent", "question_agent", "evaluation_agent",
+                          "collaborative_resource", "collaborative_qa"):
+        return None
 
     try:
-        # ── 事件1: Question Agent 批改完成 → BKT显著变化 → 推评估 ──
-        if agent_name == "question_agent":
-            q_meta = agent_outputs.get("question_agent", {})
-            if q_meta.get("mode") == "grade":
-                p_known = q_meta.get("bkt_p_known", 0.5)
-                # BKT < 0.4: 薄弱, 建议重评估
-                if p_known < 0.4:
-                    logger.info("闭环事件: question→evaluation (p_known=%.2f < 0.4)", p_known)
-                    _store_suggestion(user_id, "evaluation", {
-                        "reason": f"BKT检测到薄弱点(p_known={p_known:.2f})，建议评估",
-                        "priority": "high",
-                    })
+        from app.services.bkt_service import get_tracker
+        tracker = get_tracker(user_id)
+        all_nodes = tracker.nodes
 
-        # ── 事件2: Evaluation Agent 完成 → 薄弱点变化 → 推路径重规划 ──
-        elif agent_name == "evaluation_agent":
-            eval_meta = agent_outputs.get("evaluation_agent", {})
-            dims = eval_meta.get("dimension_scores", {})
-            weak_dims = [k for k, v in dims.items() if isinstance(v, (int, float)) and v < 40]
-            if weak_dims:
-                logger.info("闭环事件: evaluation→path (薄弱维度: %s)", weak_dims)
-                _store_suggestion(user_id, "path", {
-                    "reason": f"评估发现薄弱维度: {', '.join(weak_dims)}，建议重新规划",
-                    "weak_dims": weak_dims,
-                    "priority": "high",
-                })
+        mastered = tracker.get_mastered()
+        weak = tracker.get_weak_points()
+        total = len(all_nodes)
 
-        # ── 事件3: Resource Agent 教学完成 → 推练习 + 记录复习 ──
-        elif agent_name == "resource_agent":
-            # 记录到艾宾浩斯复习调度器（教学完一个知识点 = 首次复习节点）
-            try:
-                r_meta = agent_outputs.get("resource_agent", {})
-                taught_topic = r_meta.get("title") or r_meta.get("topic", "")
-                if taught_topic:
-                    from app.services.review_scheduler import get_scheduler
-                    sched = get_scheduler(user_id)
-                    sched.record_review(taught_topic)
-                    logger.info("闭环事件: resource→review_scheduler 已记录复习节点 '%s'", taught_topic)
-            except Exception:
-                pass  # 复习记录非关键路径
-            _store_suggestion(user_id, "question", {
-                "reason": "教学完成后推荐练习巩固",
-                "priority": "medium",
-            })
-
-        # ── 事件4: Profile Agent 画像采集完成 → 推测试/路径 ──
-        elif agent_name == "profile_agent":
-            _store_suggestion(user_id, "path", {
-                "reason": "画像更完善了，要不要规划一下学习路径？",
-                "priority": "medium",
-            })
-
-        # ── 所有Agent完成后的通用建议 ──
-        if agent_name not in ("profile_agent",):
-            _store_suggestion(user_id, agent_name.replace("_agent", ""), {
-                "reason": _get_agent_suggestion_text(agent_name),
-                "priority": "low",
-            })
-
-    except Exception as e:
-        logger.warning("事件驱动钩子失败: %s", e)
-
-def _get_agent_suggestion_text(agent_name: str) -> str:
-    return {
-        "resource_agent": "刚学完一个知识点，做两道题巩固一下吧",
-        "question_agent": "题目做完了，看看评估报告了解自己的掌握情况",
-        "evaluation_agent": "评估完成了，根据薄弱点针对学习效果更好",
-        "path_agent": "路径规划好了，开始第一个知识点的学习吧",
-        "profile_agent": "画像更完善了，系统能更好地为你个性化推荐",
-    }.get(agent_name, "继续探索更多学习功能")
-
-
-def _store_suggestion(user_id: int, intent: str, context: dict):
-    """存储 Agent 联动建议 (写入 Redis 或 Profile 的 suggestions 字段)"""
-    try:
-        from app.models.profile import LearningProfile
-        from app.core.database import SessionLocal
-        db = SessionLocal()
-        try:
-            row = db.query(LearningProfile).filter(LearningProfile.user_id == user_id).first()
-            if row:
-                suggestions = list(row.suggestions or []) if isinstance(row.suggestions, list) else []
-                # 去重: 同意图30分钟内不重复建议
-                import time
-                now = time.time()
-                recent = any(
-                    s.get("intent") == intent and now - s.get("ts", 0) < 1800
-                    for s in suggestions[-5:]  # 只检查最近5条
-                )
-                if not recent:
-                    suggestions.append({"intent": intent, "ts": now, **context})
-                    row.suggestions = suggestions[-10:]  # 保留最近10条
-                    db.commit()
-        finally:
-            db.close()
-    except Exception:
-        pass  # 建议存储失败不影响主流程
-
-
-def _extract_and_boost(user_id: int, user_message: str):
-    """从用户消息中提取知识点 → 更新 knowledge_base（不依赖 Agent 路由）
-
-    原则：
-      1. 先判断消息是否有学习意图（闲聊/问候/感谢等直接跳过）
-      2. 从知识图谱 51 个专有名词中匹配，而非用通配正则提取
-      3. 匹配到的 KG 节点名 = 标准化概念名，无需二次 normalize
-    """
-    if not user_id or not user_message:
-        return
-
-    user_message_lower = user_message.lower()
-
-    # ═══════════════════════════════════════════════════════════
-    # Step 1: 学习意图预过滤 — 非学习意图的消息不触发知识更新 (中英双语)
-    # ═══════════════════════════════════════════════════════════
-    LEARNING_INTENT_KEYWORDS = [
-        # 明确学习意图 (CN)
-        '学', '教', '讲', '解释', '介绍', '什么是', '什么叫', '怎么做', '如何',
-        '帮我', '给我', '我要', '我想', '帮我学', '教我', '讲一下', '说说',
-        # 做题意图
-        '出题', '做题', '测试', '考', '练习', '题目', '来点', '给我出',
-        # 资源意图
-        '生成', '资料', '笔记', '导图', '代码', '案例', '资源', '文档',
-        # 评估意图
-        '评估', '掌握', '学得', '水平', '报告', '分析',
-        # 明确学习意图 (EN)
-        'learn', 'teach', 'explain', 'what is', 'how to', 'how does',
-        'tell me about', 'show me', 'i want to', 'help me',
-        # 做题意图 (EN)
-        'exercise', 'question', 'problem', 'quiz', 'practice', 'test',
-        # 资源意图 (EN)
-        'generate', 'code', 'example', 'tutorial', 'mindmap', 'document',
-        # 评估意图 (EN)
-        'evaluate', 'assess', 'report', 'progress', 'check my',
-    ]
-    has_learning_intent = any(kw in user_message_lower for kw in LEARNING_INTENT_KEYWORDS)
-    if not has_learning_intent:
-        return  # 闲聊/问候/感谢/日常对话 — 不触发知识更新
-
-    # ═══════════════════════════════════════════════════════════
-    # Step 2: 加载知识图谱节点作为专有名词词表
-    # ═══════════════════════════════════════════════════════════
-    try:
-        from app.services.bkt_service import _load_kg_vocabulary
-        kg_nodes = _load_kg_vocabulary()
-    except Exception:
-        return
-    if not kg_nodes:
-        return
-
-    # ═══════════════════════════════════════════════════════════
-    # Step 3: 在用户消息中查找知识图谱专有名词（含子串匹配）
-    # ═══════════════════════════════════════════════════════════
-    matched_concepts = []
-    for node in kg_nodes:
-        if node in user_message:
-            matched_concepts.append(node)
-            continue
-        # 子串匹配：将节点名按中英文边界切分后匹配
-        # 例如 "Python基础" → ["Python", "基础"], "C++基础" → ["C++", "基础"]
-        node_parts = re.split(r'(?<=[a-zA-Z0-9+#])(?=[一-鿿])|(?<=[一-鿿])(?=[a-zA-Z0-9+#])|与|和|/', node)
-        node_parts = [p.strip() for p in node_parts if len(p.strip()) >= 2]
-        for part in node_parts:
-            if part in user_message:
-                matched_concepts.append(node)
-                break
-        else:
-            # 纯中文节点（如 "排序算法"），取其前2字做前缀匹配
-            # 用户说 "来点排序题目" 可以匹配到 "排序算法"
-            if len(node) >= 3 and all('一' <= c <= '鿿' or c in '·' for c in node[:2]):
-                prefix = node[:2]
-                if prefix in user_message and prefix not in ('什么', '怎么', '如何', '为什么', '哪个'):
-                    matched_concepts.append(node)
-
-    if not matched_concepts:
-        # 没有匹配到 KG 专有名词 → 不更新（避免把"列表"之外的无关词条入库）
-        return
-
-    # ═══════════════════════════════════════════════════════════
-    # Step 4: 更新 Profile + 同步到 BKT
-    # ═══════════════════════════════════════════════════════════
-    for topic in matched_concepts:
-        try:
-            with get_session() as db:
-                _boost_knowledge_score(db, user_id, topic)
-                logger.info("学习闭环: KG节点 '%s' → Profile 已更新", topic)
-        except Exception as e:
-            logger.warning("学习闭环失败 (topic=%s): %s", topic, e)
-
-    # 批量同步 BKT
-    try:
-        from app.services.bkt_service import sync_profile_to_bkt
-        kb_sync = _load_profile(user_id)
-        if kb_sync:
-            sync_profile_to_bkt(user_id, kb_sync.get("knowledge_base", {}))
-    except Exception as _e:
-        logger.warning("Profile→BKT 同步失败: %s", _e)
-
-
-def _silent_profile_collect(user_id: int, user_message: str):
-    """静默画像采集：从非 profile 交互中提取背景信息 (中英双语)
-
-    限制：仅对含学习相关关键词的消息触发，闲聊/问候等无关语句跳过。
-    """
-    if not user_id or not user_message:
-        return
-
-    text = user_message.strip()
-    text_lower = text.lower()
-
-    # 学习意图预过滤 — 中英双语
-    LEARNING_KEYWORDS = [
-        '学', '教', '讲', '解释', '介绍', '什么是', '怎么做', '如何',
-        '帮我', '给我', '我要', '我想', '做题', '考试', '面试',
-        '学过', '用过', '会', '懂', '熟悉', '了解', '做过',
-        '喜欢', '偏好', '倾向于', '目标', '希望', '打算',
-        # EN
-        'learn', 'teach', 'explain', 'study', 'code', 'programming',
-        'exercise', 'practice', 'know', 'familiar', 'experienced',
-        'background', 'goal', 'prefer', 'want to', 'would like',
-    ]
-    if not any(kw in text_lower for kw in LEARNING_KEYWORDS):
-        return
-
-    # ── 知识基础提取 (CN + EN) ──
-    kb_patterns = [
-        # CN
-        r'(?:我)?(?:已经?|以前|之前|学过|用过|会|懂|熟悉|了解|做过)[的\s]*([\w一-鿿]{2,15})',
-        r'(?:我是|作为)([一二三四五六七八九十\d]+年?[的\s]*[\w一-鿿]{2,10})',
-        # EN
-        r"(?:i(?:'ve|\s+have)?\s+(?:learned|studied|used|worked\s+with))\s+([\w\s+#]{2,20}?)(?:\.|,|and|\s+but|$)",
-        r"(?:i\s+(?:know|am\s+familiar\s+with|have\s+experience\s+in))\s+([\w\s+#]{2,20}?)(?:\.|,|$)",
-        r"(?:my\s+background\s+(?:is\s+)?in)\s+([\w\s+#]{2,20}?)(?:\.|,|$)",
-    ]
-    goal_patterns = [
-        # CN
-        r'(?:为了|准备|想找|目标是|希望|打算)([\w一-鿿]{2,12})',
-        r'(?:求职|找工作|面试|考试|考研|转行|升职|加薪)',
-        # EN
-        r"(?:i\s+(?:want|plan|hope|aim)\s+to\s+(?:learn|study|become|get))\s+([\w\s+#]{2,20}?)(?:\.|,|$)",
-        r"(?:my\s+goal\s+(?:is\s+)?(?:to\s+)?)([\w\s+#]{2,20}?)(?:\.|,|$)",
-        r"(?:preparing\s+for)\s+([\w\s+#]{2,20}?)(?:\.|,|$)",
-    ]
-    style_patterns = [
-        # CN
-        r'(?:喜欢|偏好|更愿|倾向于|习惯)(?:看|读|听|写|做|动手)([\w一-鿿]{2,8})',
-        # EN
-        r"(?:i\s+(?:prefer|like|enjoy)\s+(?:reading|watching|listening|doing|hands-on|coding))\s*([\w\s+#]{2,12})?",
-        r"(?:i(?:'m|\s+am)\s+a\s+(visual|auditory|kinesthetic|reading|hands-on)\s+learner)",
-    ]
-    updates = {}
-
-    # ── 时间投入提取 ──
-    hours_patterns = [
-        r'每[周天日月年][\s]*(?:大概|大约|能|可[以能]|要|可以|想)?(?:投[入人]|学[习]?|花[费]?)[\s]*(\d+)[\s]*(?:个|小时|h|H|钟头)',
-        r'(\d+)[\s]*(?:小时|个?钟头|h|H)[/每][周天]',
-        r'(?:每周|每天)[\s]*(?:大概|大约|能|可以)?[\s]*(\d+)[\s]*(?:小时|h|H)',
-        r'(?:weekly|per week)[\s]*[:：]?[\s]*(\d+)[\s]*(?:hours?|hrs?|h)',
-        r'i\s+(?:can|have|spend)\s+(?:about\s+)?(\d+)\s+(?:hours?|hrs?)\s+(?:per|a|each)\s+week',
-    ]
-    for pattern in hours_patterns:
-        m = re.search(pattern, text, re.IGNORECASE)
-        if m:
-            try:
-                hours_val = float(m.group(1))
-                if 1 <= hours_val <= 100:
-                    updates["weekly_hours"] = hours_val
-                    break
-            except (ValueError, IndexError):
-                pass
-
-    # ── 偏好资源类型提取 ──
-    resource_patterns = [
-        r'(?:喜欢|偏好|更愿|倾向于|习惯)(?:看|读)[\s]*(?:文档|资料|书|文章|笔记)',
-        r'(?:喜欢|偏好|更愿|倾向于)(?:看|刷)[\s]*(?:视频|教程视频|讲解视频|录播)',
-        r'(?:喜欢|偏好|更愿|倾向于)[\s]*(?:动手|敲代码|写代码|做项目|实践)',
-        r'(?:喜欢|偏好)[\s]*(?:思维导图|脑图|导图|图解)',
-    ]
-    pref_map = [
-        (['文档','资料','书','文章','笔记'], 'text'),
-        (['视频','教程视频','讲解视频','录播','看视频'], 'video'),
-        (['动手','敲代码','写代码','做项目','实践','代码'], 'code'),
-        (['思维导图','脑图','导图','图解'], 'interactive'),
-    ]
-    for pattern in resource_patterns:
-        m = re.search(pattern, text)
-        if m:
-            matched_text = m.group(0)
-            for keywords, pref_val in pref_map:
-                if any(kw in matched_text for kw in keywords):
-                    updates["preferred_resource_type"] = pref_val
-                    break
-            break
-
-    for pattern in kb_patterns:
-        m = re.search(pattern, text, re.IGNORECASE)
-        if m:
-            val = m.group(1).strip() if len(m.groups()) > 0 and m.group(1) else m.group(0)
-            if len(val) >= 2:
-                updates["knowledge_base"] = val
-                break
-    for pattern in goal_patterns:
-        m = re.search(pattern, text, re.IGNORECASE)
-        if m:
-            val = m.group(1).strip() if len(m.groups()) > 0 and m.group(1) else m.group(0)
-            if len(val) >= 2:
-                updates["learning_goal"] = val
-            else:
-                updates["learning_goal"] = m.group(0)
-            break
-    for pattern in style_patterns:
-        m = re.search(pattern, text, re.IGNORECASE)
-        if m:
-            val = m.group(1).strip() if m and m.group(1) else ""
-            if val:
-                # 规范化到标准值: visual/auditory/kinesthetic/reading
-                val_lower = val.lower()
-                if any(kw in val_lower for kw in ['看','读','视觉','图','视频','watch','read','visual']):
-                    updates["cognitive_style"] = "visual"
-                elif any(kw in val_lower for kw in ['听','音频','auditory','listen']):
-                    updates["cognitive_style"] = "auditory"
-                elif any(kw in val_lower for kw in ['动手','做','写代码','实践','操作','项目','敲','kinesthetic','hands-on','code']):
-                    updates["cognitive_style"] = "kinesthetic"
+        # ── 提取本次会话涉及的概念 ──
+        concepts_this_session: list[str] = []
+        if agent_name == "resource_agent":
+            meta = agent_outputs.get("resource_agent", {})
+            topic = meta.get("title") or meta.get("topic", "")
+            if topic:
+                concepts_this_session.append(topic)
+        elif agent_name == "question_agent":
+            meta = agent_outputs.get("question_agent", {})
+            kw = meta.get("knowledge_points") or meta.get("topic") or ""
+            if kw:
+                if isinstance(kw, list):
+                    concepts_this_session.extend(kw)
                 else:
-                    updates["cognitive_style"] = "reading"
-            break
-    if not updates:
-        return
-    try:
-        with get_session() as db:
-            row = db.query(LearningProfile).filter(LearningProfile.user_id == user_id).first()
-            if row:
-                for key, value in updates.items():
-                    old_val = getattr(row, key, None)
-                    if not old_val or (isinstance(old_val, str) and len(old_val) < 3):
-                        setattr(row, key, value)
-                        logger.info("静默采集: %s = '%s' (user_id=%d)", key, value, user_id)
-                # 更新 dimension_scores
-                try:
-                    from app.agents.profile_agent import _compute_dimension_scores
-                    profile_dict = {
-                        "knowledge_base": str(row.knowledge_base or ""),
-                        "cognitive_style": row.cognitive_style,
-                        "learning_goal": row.learning_goal,
-                        "weekly_hours": row.weekly_hours,
-                        "preferred_resource_type": row.preferred_resource_type,
-                        "error_patterns": row.error_patterns,
-                    }
-                    row.dimension_scores = _compute_dimension_scores(profile_dict)
-                    from sqlalchemy.orm.attributes import flag_modified
-                    flag_modified(row, "dimension_scores")
-                except Exception:
-                    pass  # 非关键路径
-    except Exception as e:
-        logger.warning("静默采集失败: %s", e)
+                    concepts_this_session.append(str(kw))
+        elif agent_name == "evaluation_agent":
+            meta = agent_outputs.get("evaluation_agent", {})
+            kw = meta.get("knowledge_points") or []
+            if isinstance(kw, list):
+                concepts_this_session.extend(kw)
 
+        lines = ["\n\n---\n"]
+        lines.append("> **学习小结**  \n")
 
-def _boost_knowledge_score(db, user_id: int, topic: str, boost: float = 8.0):
-    """资源生成/学习行为后，更新用户画像 knowledge_base + 同步 BKT 追踪器"""
-    topic = _normalize_concept_name(topic)
-    if topic == "未分类":
-        return
-    row = db.query(LearningProfile).filter(LearningProfile.user_id == user_id).first()
-    if not row:
-        # 自动创建画像（用户首次对话时 profile 可能尚不存在）
-        row = LearningProfile(user_id=user_id, knowledge_base={})
-        db.add(row)
-        db.flush()
-        logger.info("FeedbackLoop: 自动创建画像 (user_id=%d)", user_id)
-    kb = row.knowledge_base
-    if not kb or isinstance(kb, str):
-        kb = _structure_knowledge_base(str(kb or "")) if isinstance(kb, str) else {}
-    matched_key = None
-    for existing_key in kb:
-        if topic.lower() in existing_key.lower() or existing_key.lower() in topic.lower():
-            matched_key = existing_key
-            break
-    if matched_key:
-        old_val = float(kb[matched_key]) if isinstance(kb[matched_key], (int, float)) else 55.0
-        kb[matched_key] = round(min(95, old_val + boost), 1)
-        logger.info("FeedbackLoop: 提升知识点 '%s' %.1f -> %.1f", matched_key, old_val, kb[matched_key])
-    else:
-        kb[topic] = 40.0
-        logger.info("FeedbackLoop: 新增知识点 '%s' -> 40.0", topic)
-    row.knowledge_base = kb
-    from sqlalchemy.orm.attributes import flag_modified
-    flag_modified(row, "knowledge_base")
+        # 1) 本次学习内容
+        if concepts_this_session:
+            lines.append(f"> 本次学习: {'、'.join(concepts_this_session)}")
 
-    # 每次知识更新后重算 dimension_scores（确保雷达图数据始终最新）
-    try:
-        from app.agents.profile_agent import _compute_dimension_scores
-        pdict = {
-            "knowledge_base": str(row.knowledge_base or ""),
-            "cognitive_style": row.cognitive_style,
-            "learning_goal": row.learning_goal,
-            "weekly_hours": row.weekly_hours,
-            "preferred_resource_type": row.preferred_resource_type,
-            "error_patterns": row.error_patterns,
-        }
-        row.dimension_scores = _compute_dimension_scores(pdict)
-        flag_modified(row, "dimension_scores")
-    except Exception:
-        pass  # 非关键路径，不影响主流程
+        # 2) BKT 掌握概览
+        if total > 0:
+            lines.append(f"> 知识掌握: {len(mastered)}/{total} 个概念已精通")
+
+        # 3) 最强领域（p_known 最高的 3 个已掌握知识点）
+        if mastered:
+            strong_3 = sorted(
+                [(n, all_nodes[n].p_known) for n in mastered if n in all_nodes],
+                key=lambda x: -x[1],
+            )[:3]
+            if strong_3:
+                lines.append(f"> 最强领域: {', '.join(f'{n}({p:.0%})' for n, p in strong_3)}")
+
+        # 4) 薄弱环节（p_known 最低的 3 个）
+        if weak:
+            weak_3 = sorted(
+                [(n, all_nodes[n].p_known) for n in weak if n in all_nodes],
+                key=lambda x: x[1],
+            )[:3]
+            if weak_3:
+                lines.append(f"> 需加强: {', '.join(f'{n}({p:.0%})' for n, p in weak_3)}")
+
+        # 5) 下一步推荐
+        if weak:
+            lines.append(f"> 建议下一步: 巩固 **{weak[0]}**")
+        elif agent_name == "resource_agent" and concepts_this_session:
+            lines.append(f"> 建议下一步: 做几道练习巩固 **{concepts_this_session[0]}**")
+
+        return "\n".join(lines) + "\n"
+    except Exception as exc:
+        logger.warning("学习小结生成跳过 (non-fatal): %s", exc)
+        return None
 
 
 def _load_profile(user_id: int) -> dict | None:
@@ -761,7 +320,7 @@ def _extract_topic_context(history_msgs: list, current_msg: str) -> dict:
 async def _bridge_stream(spark, messages: list, temperature: float, max_tokens: int, use_safe: bool = False, chunk_size: int = 2):
     """线程安全队列桥接：把同步的 chat_stream 转成异步生成器"""
     queue: asyncio.Queue = asyncio.Queue()
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     def _run():
         try:
@@ -786,7 +345,7 @@ async def _bridge_stream(spark, messages: list, temperature: float, max_tokens: 
         finally:
             loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
 
-    ThreadPoolExecutor(max_workers=1).submit(_run)
+    _bridge_executor.submit(_run)
 
     # True streaming: yield chunks as they arrive (NOT buffered)
     # chunk_size > 0 enables character-level typewriter effect
@@ -848,10 +407,12 @@ async def chat_send(
 
     # 从 checkpoint 恢复 teaching_context（跨轮次持久化）
     prev_teaching_ctx = None
+    prev_context = {}  # P1-1: 恢复画像追问冷却位点
     try:
         snapshot = await asyncio.to_thread(graph.get_state, config)
         if snapshot and snapshot.values:
             prev_teaching_ctx = snapshot.values.get("teaching_context")
+            prev_context = snapshot.values.get("context", {}) or {}
             if prev_teaching_ctx and prev_teaching_ctx.get("mode") == "teaching":
                 logger.info("SSE: 恢复教学流程 state (current=%d/%d)",
                             prev_teaching_ctx.get("current_index", 0) + 1,
@@ -859,12 +420,23 @@ async def chat_send(
     except Exception as _e:
         logger.debug("SSE: 获取 checkpoint 教学状态失败（新用户正常）: %s", _e)
 
+    # P1-1: 累加 last_profile_ask_at（每轮对话 +1，达到冷却阈值后允许再次追问）
+    _lpa = prev_context.get("last_profile_ask_at", 0)
+    _pac = prev_context.get("profile_ask_count", 0)
+    _pfd = prev_context.get("profile_first_done", False)
+    _restored_context = {**prev_context}
+    if _lpa < 5:
+        _restored_context["last_profile_ask_at"] = _lpa + 1
+        logger.debug("P1-1: last_profile_ask_at 递增: %d -> %d (ask_count=%d, done=%s)",
+                     _lpa, _lpa + 1, _pac, _pfd)
+
     initial_state = {
         "messages": history_msgs + [user_msg],
         "current_agent": "supervisor",
         "next_agent": None,
         "user_profile": _load_profile(user_id),
-        "context": {"topic_context": topic_ctx},
+        # P1-1: 合并 topic_context + 恢复的画像冷却位点
+        "context": {**{"topic_context": topic_ctx}, **_restored_context},
         "agent_outputs": {},
         "stream_buffer": "",
         "user_id": user_id,
@@ -901,14 +473,41 @@ async def chat_send(
                     if agent_output:
                         _captured_outputs.update(agent_output)
 
+                    # 协作模式检测: 如果当前节点是并行协作节点，发射 collaboration 事件
+                    _collab_mode = agent_output.get("_collaboration_mode")
+                    if _collab_mode:
+                        _collab_agents_map = {
+                            "qa_parallel": ["question_agent", "evaluation_agent"],
+                            "resource_parallel": ["resource_agent", "quality_reviewer"],
+                            "path_parallel": ["path_agent", "resource_agent"],
+                        }
+                        _collab_agents = _collab_agents_map.get(_collab_mode, [agent_name])
+                        yield f"event: collaboration\ndata: {json.dumps({'type': 'collaboration', 'action': 'parallel', 'agents': _collab_agents, 'primary': agent_name}, ensure_ascii=False)}\n\n"
+
                     _resource_meta = agent_output.get(agent_name, {})
                     if _resource_meta and "type" in _resource_meta and agent_name == "resource_agent":
-                        _res_payload = json.dumps({
-                            "type": "resource",
-                            "resource_type": _resource_meta.get("type", "document"),
-                            "title": _resource_meta.get("title") or _resource_meta.get("topic", "学习资源"),
-                        }, ensure_ascii=False)
-                        yield f"event: resource\ndata: {_res_payload}\n\n"
+                        _r_type = _resource_meta.get("type", "document")
+                        _r_title = _resource_meta.get("title") or _resource_meta.get("topic", "学习资源")
+                        # 在 SSE 流内保存占位资源到 DB，获取真实 resource_id
+                        _r_id = 0
+                        try:
+                            from app.models.resource import Resource as RModel
+                            from app.core.database import SessionLocal
+                            _rdb = SessionLocal()
+                            try:
+                                _rr = RModel(user_id=user_id, resource_type=_r_type,
+                                             title=_r_title, content="", generated_by="resource_agent")
+                                _rdb.add(_rr)
+                                _rdb.flush()
+                                _r_id = _rr.id
+                                _resource_meta["db_id"] = _r_id
+                                logger.info("SSE: 资源占位已创建 id=%d type=%s", _r_id, _r_type)
+                            finally:
+                                _rdb.close()
+                        except Exception as _re:
+                            logger.warning("SSE: 资源占位创建失败: %s", _re)
+                        # 发射 resource_ready（携带真实 resource_id，可立即使用）
+                        yield f"event: resource_ready\ndata: {json.dumps({'type': 'resource_ready', 'resource_id': _r_id, 'resource_type': _r_type, 'title': _r_title}, ensure_ascii=False)}\n\n"
 
                     pending = agent_output.get(agent_name, {}).get("stream_pending")
                     if pending:
@@ -961,32 +560,29 @@ async def chat_send(
                             assistant_content += safe_msg
                             yield f"event: message\ndata: {json.dumps({'content': safe_msg, 'agent': agent_name}, ensure_ascii=False)}\n\n"
 
-            # 教学资源/评估：追加 Mermaid 图表（后端生成）
-            if user_id and assistant_content:
-                try:
-                    from app.services.bkt_service import get_tracker as _gt
-                    tracker3 = _gt(user_id)
-                    all_nodes = tracker3.to_dict().get("nodes", {})
-                    if not all_nodes:
-                        profile_kb2 = _load_profile(user_id)
-                        kb2 = (profile_kb2 or {}).get("knowledge_base", {}) or {}
-                        all_nodes = {k: {"p_known": v/100} for k, v in kb2.items() if isinstance(v, (int, float))}
-                    if all_nodes:
-                        concepts = [(n, d.get("p_known", 0) if isinstance(d, dict) else d) for n, d in all_nodes.items()]
-                        concepts.sort(key=lambda x: -x[1])
-                        mastered = sum(1 for _, pk in concepts if pk >= 0.7)
-                        learning = sum(1 for _, pk in concepts if 0.35 <= pk < 0.7)
-                        new = sum(1 for _, pk in concepts if pk < 0.35)
-                        total = len(concepts)
-                        if total > 0:
-                            mm = f"\n\n```mermaid\npie title Knowledge ({total} concepts)\n"
-                            mm += f'    "Mastered(>=70%)" : {mastered}\n'
-                            mm += f'    "Learning(35-70%)" : {learning}\n'
-                            mm += f'    "New(<35%)" : {new}\n```\n'
-                            assistant_content += mm
-                            yield f"event: message\ndata: {json.dumps({'content': mm, 'agent': (assistant_agent or 'system')}, ensure_ascii=False)}\n\n"
-                except Exception:
-                    pass
+                    # P2-1: 路径动态重规划 → 推送 path_update 结构化事件 + 解释消息
+                    _pa_out = agent_output.get("path_agent", {})
+                    if _pa_out.get("teaching_stage") == "replanned":
+                        _new = _pa_out.get("new_unlocked", [])
+                        _skip = _pa_out.get("skipped", [])
+                        _current_node = _pa_out.get("current_node", "")
+                        _reason_parts = []
+                        if _skip:
+                            _reason_parts.append(f"已掌握: {'、'.join(_skip)}")
+                        if _new:
+                            _reason_parts.append(f"新解锁: {'、'.join(_new)}")
+                        if _reason_parts:
+                            _reason_text = "通过BKT追踪发现，" + "、".join(_skip) + " 的掌握概率已超过阈值，因此跳过并解锁了 " + "、".join(_new) + " 个新节点"
+                            yield (
+                                "event: path_update\n"
+                                f"data: {json.dumps({'action': 'replanned', 'new_unlocked': _new, 'skipped': _skip, 'current_node': _current_node, 'reason': _reason_text}, ensure_ascii=False)}\n\n"
+                            )
+                            _joined_reasons = "\n> ".join(_reason_parts)
+                            _explain_msg = "\n\n> **路径更新**\n> " + _joined_reasons + "\n> 学习路径已自动调整，进入下一阶段学习。\n"
+                            assistant_content += _explain_msg
+                            yield f"event: message\ndata: {json.dumps({'content': _explain_msg, 'agent': 'system', 'type': 'explanation'}, ensure_ascii=False)}\n\n"
+
+                    # [已删除] 全Agent英文饼图 — 仅 evaluation_agent 保留中文饼图(见下方)
 
             # 评估报告：追加 Mermaid 饼图（后端生成，不受 LLM 影响）
             if assistant_agent == "evaluation_agent" and user_id:
@@ -1014,13 +610,57 @@ async def chat_send(
                         yield f"event: message\ndata: {json.dumps({'content': mm, 'agent': 'evaluation_agent'}, ensure_ascii=False)}\n\n"
                 except Exception:
                     pass
+            # 资源生成：追加 Mermaid 知识点分布图
+            if assistant_agent == "resource_agent" and user_id:
+                try:
+                    profile = _load_profile(user_id)
+                    kb = (profile or {}).get("knowledge_base", {}) or {}
+                    if isinstance(kb, dict) and kb:
+                        sorted_kb = sorted(
+                            [(k, v) for k, v in kb.items() if isinstance(v, (int, float))],
+                            key=lambda x: x[1], reverse=True
+                        )[:6]
+                        if sorted_kb:
+                            lines_mm = [f'    "{name}": {score}' for name, score in sorted_kb]
+                            mm = "\n\n`mermaid\npie title 知识点覆盖分布\n" + "\n".join(lines_mm) + "\n`\n"
+                            assistant_content += mm
+                            yield f"event: message\ndata: {json.dumps({'content': mm, 'agent': 'resource_agent'}, ensure_ascii=False)}\n\n"
+                except Exception:
+                    pass
+
+            # 出题：追加 Mermaid 难度分布图
+            if assistant_agent == "question_agent":
+                try:
+                    mm = "\n\n`mermaid\npie title 题目难度分布\n    \"\u57fa\u7840\" : 40\n    \"\u4e2d\u7b49\" : 35\n    \"\u56f0\u96be\" : 25\n`\n"
+                    assistant_content += mm
+                    yield f"event: message\ndata: {json.dumps({'content': mm, 'agent': 'question_agent'}, ensure_ascii=False)}\n\n"
+                except Exception:
+                    pass
+
+
+            # ═══════════════════════════════════════════════════════════
+            # 自动学习小结 — teaching/evaluation session 后生成结构化总结
+            # 包含：本次概念、BKT 掌握变化、下一步建议
+            # ═══════════════════════════════════════════════════════════
+            summary = _generate_learning_summary(user_id, assistant_agent, _captured_outputs)
+            if summary:
+                assistant_content += summary
+                yield f"event: message\ndata: {json.dumps({'content': summary, 'agent': assistant_agent, 'type': 'summary'}, ensure_ascii=False)}\n\n"
 
             yield f"event: done\ndata: {json.dumps({'status': 'complete', 'agent_switches': _agent_switch_count})}\n\n"
 
             if user_id and assistant_content:
                 with get_session() as db2:
                     db2.add(Conversation(user_id=user_id, role="assistant", content=assistant_content, agent_type=assistant_agent))
-                _persist_agent_output(assistant_agent, assistant_content, user_id, _captured_outputs)
+                # P1-16: 从最终状态提取 teaching_context，供资源关联路径节点使用
+                _final_tc = None
+                try:
+                    final_snapshot = await asyncio.to_thread(graph.get_state, config)
+                    if final_snapshot and final_snapshot.values:
+                        _final_tc = final_snapshot.values.get("teaching_context")
+                except Exception as _tc_err:
+                    logger.debug("P1-16: 获取最终teaching_context失败 (non-fatal): %s", _tc_err)
+                _persisted = _persist_agent_output(assistant_agent, assistant_content, user_id, _captured_outputs, _final_tc)
                 # v3: 事件驱动闭环 — Agent完成后自动触发下游
                 _post_agent_event_hook(assistant_agent, user_id, _captured_outputs)
                 _extract_and_boost(user_id, request.content)
@@ -1034,20 +674,59 @@ async def chat_send(
                     if sg_list:
                         latest = sg_list[-1]
                         yield f"event: suggestion\ndata: {json.dumps(latest, ensure_ascii=False)}\n\n"
+                        # v5: auto_trigger → 推送资源预取事件，前端可提前加载首个节点资源
+                        if latest.get("auto_trigger") and latest.get("intent") == "resource":
+                            yield f"event: prefetch\ndata: {json.dumps({'type': 'resource_prefetch', 'node': latest.get('topic', ''), 'status': 'queued'}, ensure_ascii=False)}\n\n"
                 except Exception:
                     pass
+            # ═══════════════════════════════════════════════════════════
+            # P1-24: 复习提醒检查 — SSE review_due 事件
+            # 每次对话完成后推送到期复习知识点，前端渲染 Dashboard 待复习卡片
+            # ═══════════════════════════════════════════════════════════
+            if user_id:
+                try:
+                    from app.services.review_scheduler import get_scheduler as _get_sched
+                    sched = _get_sched(user_id)
+                    due_nodes = sched.get_review_nodes()
+                    if due_nodes:
+                        high_risk = [n for n in due_nodes if n["risk"] == "high"]
+                        yield (
+                            "event: review_due\n"
+                            f"data: {json.dumps({'total': len(due_nodes), 'high_risk': len(high_risk), 'items': due_nodes[:5]}, ensure_ascii=False)}\n\n"
+                        )
+                except Exception:
+                    pass  # 复习提醒非关键路径，失败不影响主流程
 
         except Exception as e:
-            logger.error("SSE: event_stream 异常: %s", e)
+            logger.error("SSE: event_stream 异常: %s", e, exc_info=True)
             err_type = type(e).__name__
             err_msg = str(e)
+            # P1-2: 细化错误分类，参考 LangChain/LangGraph 错误处理
             if "timeout" in err_msg.lower() or "超时" in err_msg:
                 user_friendly = "请求超时了~ 处理时间较长，请稍后再试。"
-            elif "token" in err_msg.lower() or "limit" in err_msg.lower():
+                err_code = "TIMEOUT"
+            elif "token" in err_msg.lower() or "limit" in err_msg.lower() or "length" in err_msg.lower():
                 user_friendly = "内容过长啦~ 能不能简化一下问题？"
+                err_code = "TOKEN_LIMIT"
+            elif "rate" in err_msg.lower() or "429" in err_msg:
+                user_friendly = "服务繁忙中~ 请稍候几秒再试。"
+                err_code = "RATE_LIMIT"
+            elif "auth" in err_msg.lower() or "401" in err_msg or "403" in err_msg:
+                user_friendly = "认证信息已过期，请重新登录。"
+                err_code = "AUTH_EXPIRED"
+            elif "connection" in err_msg.lower() or "network" in err_msg.lower():
+                user_friendly = "网络连接中断了~ 请检查网络后重试。"
+                err_code = "NETWORK"
             else:
                 user_friendly = "处理过程中遇到了一点问题，请稍后重试。"
-            yield f"event: error\ndata: {json.dumps({'message': user_friendly, 'detail': err_msg[:200]}, ensure_ascii=False)}\n\n"
+                err_code = "INTERNAL"
+            # 给前端详细的错误码和 trace_id（用于排查）
+            import uuid
+            trace_id = uuid.uuid4().hex[:12]
+            logger.error("SSE: 错误追踪 trace_id=%s type=%s code=%s", trace_id, err_type, err_code)
+            yield f"event: error\ndata: {json.dumps({'message': user_friendly, 'code': err_code, 'trace_id': trace_id, 'detail': err_msg[:200]}, ensure_ascii=False)}\n\n"
+            # P1-2: 补一个 done 事件让前端能正确清理 loading 状态
+            yield f"event: done\ndata: {json.dumps({'status': 'error', 'agent_switches': _agent_switch_count}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         event_stream(),

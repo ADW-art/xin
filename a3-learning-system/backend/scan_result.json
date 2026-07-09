@@ -1,0 +1,663 @@
+{
+  "scanned_at": "2026-06-08T00:19:50.304481",
+  "total": 109,
+  "text_ok": 41,
+  "scanned_need_ocr": 55,
+  "errored": 0,
+  "books": [
+    {
+      "subject": "algorithms",
+      "filename": "剑指offer名企面试官精讲典型编程题.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "algorithms",
+      "filename": "数据结构与算法分析：C语言描述（第2版）.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "algorithms",
+      "filename": "数据结构与算法分析：Java语言描述.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "algorithms",
+      "filename": "算法导论（第2版）.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "algorithms",
+      "filename": "算法心得：高效算法的奥秘（第2版）.pdf",
+      "text_len": 94,
+      "error": null
+    },
+    {
+      "subject": "algorithms",
+      "filename": "算法设计与分析（第3版）.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "algorithms",
+      "filename": "算法（第4版）.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "algorithms",
+      "filename": "编程之美：微软技术面试心得.pdf",
+      "text_len": 43,
+      "error": null
+    },
+    {
+      "subject": "algorithms",
+      "filename": "编程珠玑（第2版）.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "c",
+      "filename": "C专家编程.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "c",
+      "filename": "C程序设计语言（第2版）.pdf",
+      "text_len": 21825,
+      "error": null
+    },
+    {
+      "subject": "c",
+      "filename": "C语言接口与实现.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "c",
+      "filename": "C陷阱与缺陷.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "c++",
+      "filename": "C++ Primer Plus（第5版）.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "c++",
+      "filename": "C++编程思想（第1卷）.pdf",
+      "text_len": 31,
+      "error": null
+    },
+    {
+      "subject": "clean-code",
+      "filename": "代码大全.pdf",
+      "text_len": 2337,
+      "error": null
+    },
+    {
+      "subject": "clean-code",
+      "filename": "代码整洁之道.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "clean-code",
+      "filename": "修改代码的艺术.pdf",
+      "text_len": 2357,
+      "error": null
+    },
+    {
+      "subject": "clean-code",
+      "filename": "程序设计实践.pdf",
+      "text_len": 3116,
+      "error": null
+    },
+    {
+      "subject": "clean-code",
+      "filename": "程序设计方法.pdf",
+      "text_len": 2749,
+      "error": null
+    },
+    {
+      "subject": "clean-code",
+      "filename": "编写可读代码的艺术.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "clean-code",
+      "filename": "重构：改善既有代码的设计.pdf",
+      "text_len": 764,
+      "error": null
+    },
+    {
+      "subject": "clean-code",
+      "filename": "领域驱动设计：软件核心复杂性应对之道.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "computer-system",
+      "filename": "深入理解计算机系统.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "computer-system",
+      "filename": "现代操作系统（第3版）.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "computer-system",
+      "filename": "编码：隐匿在计算机软硬件背后的语言.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "computer-system",
+      "filename": "编译原理（第2版）.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "computer-system",
+      "filename": "计算机程序的构造和解释（第2版）.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "computer-system",
+      "filename": "计算的本质：深入剖析程序和计算机.pdf",
+      "text_len": 175,
+      "error": null
+    },
+    {
+      "subject": "design-pattern",
+      "filename": "HeadFirst设计模式.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "design-pattern",
+      "filename": "设计模式之禅.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "design-pattern",
+      "filename": "设计模式：可复用面向对象软件的基础.pdf",
+      "text_len": 31,
+      "error": null
+    },
+    {
+      "subject": "docker",
+      "filename": "Docker从入门到实践（第3版）.pdf",
+      "text_len": 944,
+      "error": null
+    },
+    {
+      "subject": "docker",
+      "filename": "Docker容器与容器云（第2版）.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "git",
+      "filename": "GitHub入门与实践.pdf",
+      "text_len": 298,
+      "error": null
+    },
+    {
+      "subject": "git",
+      "filename": "ProGit中文版.pdf",
+      "text_len": 3039,
+      "error": null
+    },
+    {
+      "subject": "golang",
+      "filename": "Go学习笔记（第4版）.pdf",
+      "text_len": 479,
+      "error": null
+    },
+    {
+      "subject": "golang",
+      "filename": "Go学习笔记（第6版下卷）.pdf",
+      "text_len": 3295,
+      "error": null
+    },
+    {
+      "subject": "golang",
+      "filename": "Go源码剖析.pdf",
+      "text_len": 627,
+      "error": null
+    },
+    {
+      "subject": "golang",
+      "filename": "Go语言实战.pdf",
+      "text_len": 1500,
+      "error": null
+    },
+    {
+      "subject": "golang",
+      "filename": "go程序设计语言.pdf",
+      "text_len": 1849,
+      "error": null
+    },
+    {
+      "subject": "http",
+      "filename": "HTTP权威指南.pdf",
+      "text_len": 419,
+      "error": null
+    },
+    {
+      "subject": "http",
+      "filename": "Web性能权威指南.pdf",
+      "text_len": 176,
+      "error": null
+    },
+    {
+      "subject": "http",
+      "filename": "图解HTTP.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "java",
+      "filename": "Effective Java 中文版（第2版）.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "java",
+      "filename": "Java编程思想（第4版）.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "javascript",
+      "filename": "JavaScript_DOM编程艺术.pdf",
+      "text_len": 50,
+      "error": null
+    },
+    {
+      "subject": "javascript",
+      "filename": "JavaScript函数式编程.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "javascript",
+      "filename": "JavaScript权威指南(第6版).pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "javascript",
+      "filename": "JavaScript设计模式.pdf",
+      "text_len": 31,
+      "error": null
+    },
+    {
+      "subject": "javascript",
+      "filename": "JavaScript设计模式与开发实践.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "javascript",
+      "filename": "JavaScript语言精粹.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "javascript",
+      "filename": "JavaScript高级程序设计(第3版).pdf",
+      "text_len": 28,
+      "error": null
+    },
+    {
+      "subject": "javascript",
+      "filename": "javascript面向对象编程.pdf",
+      "text_len": 3007,
+      "error": null
+    },
+    {
+      "subject": "javascript",
+      "filename": "你不知道的JavaScript（上卷）.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "javascript",
+      "filename": "你不知道的JavaScript（下卷）.pdf",
+      "text_len": 210,
+      "error": null
+    },
+    {
+      "subject": "javascript",
+      "filename": "你不知道的JavaScript（中卷）.pdf",
+      "text_len": 228,
+      "error": null
+    },
+    {
+      "subject": "javascript",
+      "filename": "基于MVC的JavaScript_Web富应用开发.pdf",
+      "text_len": 13575,
+      "error": null
+    },
+    {
+      "subject": "javascript",
+      "filename": "精通JavaScript.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "linux",
+      "filename": "Linux内核设计与实现（第三版）.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "linux",
+      "filename": "UNIX操作系统设计.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "linux",
+      "filename": "UNIX环境高级编程(第三版).pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "linux",
+      "filename": "UNIX编程艺术.pdf",
+      "text_len": 44,
+      "error": null
+    },
+    {
+      "subject": "linux",
+      "filename": "UNIX网络编程卷1：套接字API.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "linux",
+      "filename": "UNIX网络编程卷2：进程间通信.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "linux",
+      "filename": "深入Linux内核架构.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "linux",
+      "filename": "深入理解linux内核（第三版）.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "linux",
+      "filename": "跟我一起写makefile.pdf",
+      "text_len": 10013,
+      "error": null
+    },
+    {
+      "subject": "microservice",
+      "filename": "微服务设计.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "mongodb",
+      "filename": "MongoDB实战.pdf",
+      "text_len": 10722,
+      "error": null
+    },
+    {
+      "subject": "mongodb",
+      "filename": "MongoDB权威指南.pdf",
+      "text_len": 50,
+      "error": null
+    },
+    {
+      "subject": "mongodb",
+      "filename": "深入学习MongoDB.pdf",
+      "text_len": 589,
+      "error": null
+    },
+    {
+      "subject": "mysql",
+      "filename": "MySQL必知必会.pdf",
+      "text_len": 1555,
+      "error": null
+    },
+    {
+      "subject": "mysql",
+      "filename": "MySQL性能调优与架构设计.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "mysql",
+      "filename": "MySQL技术内幕：InnoDB存储引擎.pdf",
+      "text_len": 31,
+      "error": null
+    },
+    {
+      "subject": "mysql",
+      "filename": "SQL基础教程.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "mysql",
+      "filename": "SQL学习指南.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "mysql",
+      "filename": "高性能MySQL（第3版）中文版.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "nginx",
+      "filename": "深入理解Nginx：模块开发与架构解析（第2版）.pdf",
+      "text_len": 746,
+      "error": null
+    },
+    {
+      "subject": "nodejs",
+      "filename": "Node.js实战.pdf",
+      "text_len": 250,
+      "error": null
+    },
+    {
+      "subject": "nodejs",
+      "filename": "Node.js开发指南.pdf",
+      "text_len": 525,
+      "error": null
+    },
+    {
+      "subject": "nodejs",
+      "filename": "Node与Express开发.pdf",
+      "text_len": 175,
+      "error": null
+    },
+    {
+      "subject": "nodejs",
+      "filename": "Node即学即用.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "nodejs",
+      "filename": "Node学习指南.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "nodejs",
+      "filename": "了不起的Node.js.pdf",
+      "text_len": 73,
+      "error": null
+    },
+    {
+      "subject": "nodejs",
+      "filename": "深入浅出Node.js.pdf",
+      "text_len": 361,
+      "error": null
+    },
+    {
+      "subject": "others",
+      "filename": "七周七语言：理解多种编程范型.pdf",
+      "text_len": 635,
+      "error": null
+    },
+    {
+      "subject": "others",
+      "filename": "如何阅读一本书.pdf",
+      "text_len": 12106,
+      "error": null
+    },
+    {
+      "subject": "others",
+      "filename": "程序员修炼之道：从小工到专家.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "others",
+      "filename": "程序员的职业素养.pdf",
+      "text_len": 107,
+      "error": null
+    },
+    {
+      "subject": "others",
+      "filename": "程序员的自我修养：链接、装载与库.pdf",
+      "text_len": 53,
+      "error": null
+    },
+    {
+      "subject": "others",
+      "filename": "高效程序员的45个习惯.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "python",
+      "filename": "Python_Cookbook.pdf",
+      "text_len": 3097,
+      "error": null
+    },
+    {
+      "subject": "python",
+      "filename": "Python基础教程（第2版）.pdf",
+      "text_len": 47,
+      "error": null
+    },
+    {
+      "subject": "python",
+      "filename": "Python源码剖析.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "python",
+      "filename": "Python编程：从入门到实践.pdf",
+      "text_len": 390,
+      "error": null
+    },
+    {
+      "subject": "python",
+      "filename": "python核心编程.pdf",
+      "text_len": 3045,
+      "error": null
+    },
+    {
+      "subject": "redis",
+      "filename": "Redis入门指南（第2版）.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "redis",
+      "filename": "Redis实战.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "redis",
+      "filename": "Redis开发与运维.pdf",
+      "text_len": 567,
+      "error": null
+    },
+    {
+      "subject": "redis",
+      "filename": "Redis设计与实现.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "system",
+      "filename": "企业应用架构模式.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "system",
+      "filename": "企业集成模式：设计、构建及部署消息传递解决方案.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "system",
+      "filename": "大型网站技术架构：核心原理与案例分析.pdf",
+      "text_len": 0,
+      "error": null
+    },
+    {
+      "subject": "system",
+      "filename": "高性能网站建设指南.pdf",
+      "text_len": 758,
+      "error": null
+    },
+    {
+      "subject": "tcp",
+      "filename": "TCP_IP详解卷1：协议.pdf",
+      "text_len": 3437,
+      "error": null
+    },
+    {
+      "subject": "tcp",
+      "filename": "TCP_IP详解卷2：实现.pdf",
+      "text_len": 3420,
+      "error": null
+    },
+    {
+      "subject": "tcp",
+      "filename": "TCP_IP详解卷3：TCP事务协议，HTTP，NNTP和UNIX域协议.pdf",
+      "text_len": 2435,
+      "error": null
+    },
+    {
+      "subject": "test",
+      "filename": "测试驱动开发.pdf",
+      "text_len": 0,
+      "error": null
+    }
+  ]
+}

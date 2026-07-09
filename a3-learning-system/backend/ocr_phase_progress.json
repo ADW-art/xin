@@ -1,0 +1,72 @@
+{
+  "算法导论": {
+    "ocr_pages": 798,
+    "total_pages": 798,
+    "status": "done",
+    "total_chars": 905576
+  },
+  "编译原理": {
+    "ocr_pages": 648,
+    "total_pages": 648,
+    "status": "done",
+    "total_chars": 996691
+  },
+  "离散数学及其应用": {
+    "ocr_pages": 854,
+    "total_pages": 854,
+    "status": "done",
+    "total_chars": 1300541
+  },
+  "人工智能_现代方法": {
+    "ocr_pages": 944,
+    "total_pages": 944,
+    "status": "done",
+    "total_chars": 1412963
+  },
+  "数据库系统概念": {
+    "ocr_pages": 454,
+    "total_pages": 454,
+    "status": "done",
+    "total_chars": 801220
+  },
+  "数据结构与算法分析C++": {
+    "ocr_pages": 524,
+    "total_pages": 524,
+    "status": "done",
+    "total_chars": 685503
+  },
+  "C++程序设计语言": {
+    "ocr_pages": 750,
+    "total_pages": 750,
+    "status": "done",
+    "total_chars": 926731
+  },
+  "数据结构与算法分析": {
+    "ocr_pages": 406,
+    "total_pages": 406,
+    "status": "done",
+    "total_chars": 549720
+  },
+  "计算机网络": {
+    "ocr_pages": 464,
+    "total_pages": 464,
+    "status": "done",
+    "total_chars": 575745
+  },
+  "C++第4部分标准库": {
+    "ocr_pages": 371,
+    "total_pages": 371,
+    "status": "done",
+    "total_chars": 543358
+  },
+  "具体数学": {
+    "ocr_pages": 581,
+    "total_pages": 581,
+    "status": "done",
+    "total_chars": 769406
+  },
+  "密码编码学与网络安全": {
+    "ocr_pages": 140,
+    "total_pages": 542
+  }
+}

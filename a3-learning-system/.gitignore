@@ -23,3 +23,34 @@ chroma_data/
 # Docker
 mysql_data/
 minio_data/
+
+# Model files (downloaded at runtime)
+backend/models/
+backend/chroma_data_local/
+
+# Playwright / browser testing artifacts
+.playwright-mcp/
+
+# Static / generated files
+backend/static/
+backend/faiss_indices/
+
+# Temporary scripts and test artifacts
+backend/_fix*.py
+backend/build_faiss_only.py
+backend/full_ingest_*.py
+backend/ingest_*.py
+backend/rebuild_stores.py
+backend/reembed.py
+backend/run_ocr*.py
+backend/test_*.py
+backend/skills-lock.json
+backend/pytest.ini
+backend/ux_audit_report.txt
+*.log
+
+# Downloaded web pages (accidental)
+_c_*.html
+_cnsb.html
+_page_*.html
+_saiti_list.html

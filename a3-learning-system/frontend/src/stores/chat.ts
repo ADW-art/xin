@@ -17,7 +17,7 @@ import { ref } from 'vue'             // ref：创建响应式数据
 // 单条消息的数据结构
 export interface ChatMessage {
   id: string                          // 消息唯一 ID（用 crypto.randomUUID() 生成）
-  role: 'user' | 'assistant'          // 消息角色：用户还是 AI
+  role: 'user' | 'assistant' | 'system' // 消息角色：用户 / AI / 系统通知
   content: string                     // 消息文本内容（Markdown 格式）
   images?: string[]                   // 用户消息中的图片（data URL 列表）— 多模态
   agent?: string                      // 产生此消息的 Agent 名称
@@ -25,6 +25,7 @@ export interface ChatMessage {
   resourceType?: string               // 生成的资源类型（mindmap/code_example/document/question_set/video_script）
   resourceId?: number                 // 生成的资源ID
   resourceTitle?: string              // 生成的资源标题
+  collabAgents?: string[]              // 协作 Agent 列表
   createdAt: number                   // 创建时间戳（Date.now()）
 }
 
@@ -98,6 +99,17 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  // 添加系统通知消息（用于路径更新等后端推送事件）
+  function addSystemMessage(content: string, agent?: string) {
+    messages.value.push({
+      id: crypto.randomUUID(),
+      role: 'system',
+      content,
+      agent,
+      createdAt: Date.now(),
+    })
+  }
+
   // 清空所有消息
   function clearMessages() {
     messages.value = []
@@ -113,6 +125,7 @@ export const useChatStore = defineStore('chat', () => {
     appendToStreaming,
     setAgentSwitch,
     setResource,
+    addSystemMessage,
     finishAssistantReply,
     clearMessages,
   }

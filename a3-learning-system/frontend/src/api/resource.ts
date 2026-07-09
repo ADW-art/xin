@@ -69,3 +69,16 @@ export async function submitFeedback(id: number, score: number): Promise<Feedbac
   const response = await api.post<FeedbackResponse>(`/resources/${id}/feedback`, { score })
   return response.data
 }
+
+// 删除资源
+export async function deleteResource(id: number): Promise<void> {
+  await api.delete(`/resources/${id}`)
+}
+
+export async function getRecommendations() {
+  const token = localStorage.getItem('token')
+  const res = await fetch('/api/push/recommendations', {
+    headers: token ? { Authorization: "Bearer " + token } : {}
+  })
+  return res.json()
+}

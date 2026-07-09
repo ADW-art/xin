@@ -1,0 +1,1 @@
+python app/scripts/process_one.py "materials" "高等数学·下册 第七版 (同济大学数学系) (z-library.sk, 1lib.sk, z-lib.sk).pdf" "app/scripts/knowledge_materials\materials\高等数学·下册 第七版 (同济大学数学系) (z-library.sk, 1lib.sk, z-lib.sk).pdf"

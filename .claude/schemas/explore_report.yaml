@@ -1,0 +1,19 @@
+﻿# explore_report.yaml
+summary: string
+modules_affected:
+  - name: string
+    files:
+      - string
+    key_findings: string
+existing_patterns:
+  - string
+risks:
+  - string
+test_coverage:
+  existing_tests:
+    - string
+  gaps:
+    - string
+dependencies:
+  - string
+recommendation: string

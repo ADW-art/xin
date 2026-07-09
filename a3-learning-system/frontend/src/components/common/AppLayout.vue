@@ -74,16 +74,23 @@ const userStore = useUserStore()
 const sidebarOpen = ref(false)
 const user = computed(() => userStore.userInfo)
 
+// 菜单顺序：对标主流教育官网（学而思/可汗/Coursera/Duolingo）
+// 原则：体验流在前（用户视角），技术展示在后（评审/调试用）
+//   1. 智能中心  ─ 概览首页
+//   2. AI 对话   ─ 核心入口（80% 用户路径）
+//   3-5. 学习路径 / 资源库 / 评估报告  ─ 学 → 练 → 测 闭环
+//   6. 学习画像  ─ 个人中心
+//   7-9. Agent 协作 / BKT 追踪 / RAG 检索  ─ 技术演示（评审/调试）
 const menu = [
   { to: '/dashboard',     label: '智能中心',   icon: 'HomeFilled' },
+  { to: '/chat',          label: 'AI 对话',    icon: 'ChatDotRound' },
+  { to: '/learning-path', label: '学习路径',   icon: 'Guide' },
+  { to: '/resources',     label: '资源库',     icon: 'FolderOpened' },
+  { to: '/assessment',    label: '评估报告',   icon: 'DataAnalysis' },
+  { to: '/profile',       label: '学习画像',   icon: 'User' },
   { to: '/agents',        label: 'Agent协作',  icon: 'Connection' },
   { to: '/bkt',           label: 'BKT追踪',    icon: 'TrendCharts' },
   { to: '/rag',           label: 'RAG检索',    icon: 'Search' },
-  { to: '/chat',          label: 'AI 对话',    icon: 'ChatDotRound' },
-  { to: '/learning-path', label: '学习路径',   icon: 'Guide' },
-  { to: '/profile',       label: '学习画像',   icon: 'User' },
-  { to: '/resources',     label: '资源库',     icon: 'FolderOpened' },
-  { to: '/assessment',    label: '评估报告',   icon: 'DataAnalysis' },
 ]
 
 const pageLabels: Record<string, string> = {
@@ -408,9 +415,23 @@ function doLogout() {
 @media (max-width: 768px) {
   .hamburger { display: flex; }
   .sidebar-overlay { display: block; }
-  .sidebar { position: fixed; left: -260px; top: 0; bottom: 0; z-index: 1000; transition: left .25s; }
+  .sidebar { position: fixed; left: -260px; top: 0; bottom: 0; z-index: 1000; transition: left .25s; box-shadow: 4px 0 20px rgba(0,0,0,.12); }
   .sidebar.sidebar-open { left: 0; }
-  .content { margin-left: 0; padding: 16px; }
+  .main { width: 100%; }
+  .content { padding: 12px; }
+  .content > :deep(*) { max-width: 100%; }
+  .topbar { padding: 0 16px; }
   .app { flex-direction: column; }
+}
+
+@media (max-width: 480px) {
+  .sidebar { left: -100vw; width: 100vw; max-width: 280px; }
+  .sidebar.sidebar-open { left: 0; }
+  .hamburger { top: 8px; left: 8px; width: 32px; height: 32px; border-radius: 6px; }
+  .topbar { padding: 0 12px; height: var(--header-h); }
+  .tb-breadcrumb { font-size: 11px; }
+  .logout, .login-btn { font-size: 11px; padding: 4px 10px; }
+  .content { padding: 8px; }
+  .nav-link { height: 40px; font-size: 13px; padding: 0 12px; }
 }
 </style>

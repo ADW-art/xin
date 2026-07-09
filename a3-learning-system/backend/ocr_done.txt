@@ -1,0 +1,89 @@
+algorithms/算法导论（第2版）.pdf
+algorithms/算法（第4版）.pdf
+computer-system/编译原理（第2版）.pdf
+computer-system/现代操作系统（第3版）.pdf
+linux/UNIX网络编程卷1：套接字API.pdf
+mysql/高性能MySQL（第3版）中文版.pdf
+mysql/MySQL技术内幕：InnoDB存储引擎.pdf
+design-pattern/HeadFirst设计模式.pdf
+system/企业应用架构模式.pdf
+http/图解HTTP.pdf
+system/企业应用架构模式.pdf
+clean-code/代码整洁之道.pdf
+http/图解HTTP.pdf
+algorithms/数据结构与算法分析：C语言描述（第2版）.pdf
+linux/UNIX操作系统设计.pdf
+algorithms/数据结构与算法分析：Java语言描述.pdf
+algorithms/算法心得：高效算法的奥秘（第2版）.pdf
+javascript/你不知道的JavaScript（上卷）.pdf
+nodejs/Node即学即用.pdf
+materials/C程序设计（第五版）学习辅导 (谭浩强)（OCR） (谭浩强) (z-library.sk, 1lib.sk, z-lib.sk) (1).pdf
+materials/C程序设计（第五版）学习辅导 (谭浩强)（OCR） (谭浩强) (z-library.sk, 1lib.sk, z-lib.sk).pdf
+materials/Python_深度学习实战：75个有关神经网络建模、强化学习与迁移 (Python_深度学习实战：75个有关神经网络建模、强化学习与迁移) (z-library.sk, 1lib.sk, z-lib.sk).pdf
+algorithms/算法设计与分析（第3版）.pdf
+materials/Python编程  从入门到实践 = Python Crash Course (Eric Matthes) (z-library.sk, 1lib.sk, z-lib.sk).pdf
+algorithms/编程之美：微软技术面试心得.pdf
+materials/Rust 程序设计语言 简体中文版 (Steve Klabnik，Carol Nichols，Rust 中文社区译) (z-library.sk, 1lib.sk, z-lib.sk).pdf
+materials/Rust权威指南（社区翻译版） (Steve Klabnik, Carol Nichols etc.) (z-library.sk, 1lib.sk, z-lib.sk).pdf
+materials/Spring实战（第5版）【文字版】 (克雷格·沃斯) (z-library.sk, 1lib.sk, z-lib.sk).pdf
+materials/[图灵程序设计丛书].Web安全开发指南 ([美] John Paul Mueller) (z-library.sk, 1lib.sk, z-lib.sk).pdf
+materials/人工智能之知识图谱【文字版】 (主编, 李涓子, 刘佳, 编辑, 陶硕, 时嘉琪, 何杨, 唐丽杭 etc.) (z-library.sk, 1lib.sk, z-lib.sk).pdf
+materials/内网渗透技术 (吴丽进 主编；苗春雨 主编；郑州 副主编；雷珊珊 副主编；王伦 副主编) (z-library.sk, 1lib.sk, z-lib.sk).pdf
+materials/动手学深度学习-PyTorch(第二版) (Aston Zhang, Zachary C. Lipton, 李沐 etc.) (z-library.sk, 1lib.sk, z-lib.sk).pdf
+materials/图解HTTP (上野宣) (z-library.sk, 1lib.sk, z-lib.sk).pdf
+materials/大数据技术原理与应用(第三版) (林子雨) (z-library.sk, 1lib.sk, z-lib.sk).pdf
+materials/深入理解Nginx：模块开发与架构解析（第2版） (LinuxUnix技术丛书) (陶辉 著 [著, 陶辉]) (z-library.sk, 1lib.sk, z-lib.sk).pdf
+materials/深入理解计算机系统 (Randal E. Bryant, David R. O’Hallaron) (z-library.sk, 1lib.sk, z-lib.sk).pdf
+materials/现代操作系统 (Andrew S. Tanenbaum, Herbert Bos) (z-library.sk, 1lib.sk, z-lib.sk).pdf
+materials/线性代数 (同济大学数学系) (z-library.sk, 1lib.sk, z-lib.sk).pdf
+materials/计算机网络（原书第7版） 自顶向下方法 (James F. Kurose Keith W. Ross) (z-library.sk, 1lib.sk, z-lib.sk)(1).pdf
+algorithms/编程珠玑（第2版）.pdf
+algorithms/编程珠玑（第2版）.pdf
+c/C专家编程.pdf
+c/C专家编程.pdf
+c/C语言接口与实现.pdf
+c/C陷阱与缺陷.pdf EMPTY
+c++/C++ Primer Plus（第5版）.pdf
+c++/C++编程思想（第1卷）.pdf
+clean-code/编写可读代码的艺术.pdf EMPTY
+clean-code/领域驱动设计：软件核心复杂性应对之道.pdf EMPTY
+computer-system/深入理解计算机系统.pdf
+computer-system/编码：隐匿在计算机软硬件背后的语言.pdf
+computer-system/计算机程序的构造和解释（第2版）.pdf
+design-pattern/设计模式之禅.pdf EMPTY
+design-pattern/设计模式：可复用面向对象软件的基础.pdf
+docker/Docker容器与容器云（第2版）.pdf EMPTY
+java/Effective Java 中文版（第2版）.pdf
+java/Java编程思想（第4版）.pdf EMPTY
+javascript/JavaScript_DOM编程艺术.pdf
+javascript/JavaScript函数式编程.pdf EMPTY
+javascript/JavaScript权威指南(第6版).pdf EMPTY
+javascript/JavaScript设计模式.pdf
+javascript/JavaScript设计模式与开发实践.pdf
+javascript/JavaScript语言精粹.pdf EMPTY
+javascript/JavaScript高级程序设计(第3版).pdf
+javascript/精通JavaScript.pdf EMPTY
+linux/Linux内核设计与实现（第三版）.pdf EMPTY
+linux/UNIX环境高级编程(第三版).pdf EMPTY
+linux/UNIX编程艺术.pdf EMPTY
+linux/UNIX网络编程卷2：进程间通信.pdf
+linux/深入Linux内核架构.pdf
+linux/深入理解linux内核（第三版）.pdf
+linux/深入理解linux内核（第三版）.pdf
+microservice/微服务设计.pdf
+microservice/微服务设计.pdf
+mongodb/MongoDB权威指南.pdf
+mongodb/MongoDB权威指南.pdf
+mysql/MySQL性能调优与架构设计.pdf EMPTY
+mysql/SQL基础教程.pdf
+mysql/SQL基础教程.pdf
+mysql/SQL学习指南.pdf
+mysql/SQL学习指南.pdf
+nodejs/Node学习指南.pdf
+nodejs/Node学习指南.pdf
+nodejs/了不起的Node.js.pdf
+nodejs/了不起的Node.js.pdf
+others/程序员修炼之道：从小工到专家.pdf
+others/程序员修炼之道：从小工到专家.pdf
+others/程序员的自我修养：链接、装载与库.pdf
+others/高效程序员的45个习惯.pdf

@@ -24,7 +24,7 @@ class ReviewScheduleModel(Base):
     last_reviewed: Mapped[Optional[datetime]] = mapped_column(DateTime, default=None)
     interval_index: Mapped[int] = mapped_column(Integer, default=0)
     review_count: Mapped[int] = mapped_column(Integer, default=0)
-    memory_strength: Mapped[float] = mapped_column(Float, default=0.5)
+    memory_strength: Mapped[float] = mapped_column(Float, default=4.0)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())

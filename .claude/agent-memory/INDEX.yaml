@@ -1,0 +1,19 @@
+﻿# Agent Memory Index
+
+memory_type:
+  session_history:
+    location: ".claude/agent-memory/sessions/"
+    format: yaml
+    retention: "last 20 sessions"
+  project_knowledge:
+    location: "docs/ai/"
+    format: markdown
+    retention: "permanent"
+  decisions:
+    location: "docs/ai/decisions/"
+    format: yaml
+    retention: "permanent"
+  module_cards:
+    location: "docs/ai/modules/"
+    format: markdown
+    retention: "permanent"

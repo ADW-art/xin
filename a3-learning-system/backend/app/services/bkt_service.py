@@ -175,6 +175,7 @@ class KnowledgeNode:
         # 统计计数
         self.total_attempts: int = 0
         self.correct_count: int = 0
+        self._recent_results: list[bool] = []  # 最近10次答题结果 (True=正确)
 
         # v4: 完整更新历史
         self.update_history: list[UpdateStep] = []
@@ -260,6 +261,9 @@ class KnowledgeNode:
         self.total_attempts += 1
         if is_correct:
             self.correct_count += 1
+        self._recent_results.append(is_correct)
+        if len(self._recent_results) > 10:
+            self._recent_results.pop(0)
         self._dirty = True
 
         # ── 构建步骤明细 ──
@@ -340,6 +344,11 @@ class KnowledgeNode:
     @property
     def is_mastered(self) -> bool:
         return self.p_known > MASTERY_THRESHOLD
+
+    @property
+    def recent_correct(self) -> int:
+        """最近10次答题中正确的次数（用于趋势检测）"""
+        return sum(1 for r in self._recent_results if r)
 
     @property
     def level(self) -> str:
@@ -902,16 +911,22 @@ class BKTTracker:
         return self.nodes[concept]
 
     def record_answer(self, concept: str, is_correct: bool) -> UpdateStep:
-        """记录一次答题，返回更新步骤明细"""
+        """记录一次答题，返回更新步骤明细（概念名自动规范化到 KG 词汇表）"""
+        normalized = normalize_concept_name(concept)
+        if normalized and normalized != "未分类":
+            concept = normalized
         node = self.get_or_create(concept)
         step = node.update(is_correct)
 
-        # v4: 自动触发 EM 拟合检查（每 5 次答题后检查一次）
-        if node.total_attempts % 5 == 0 and node.total_attempts >= EM_MIN_OBSERVATIONS:
-            try:
-                estimate_params_from_node(node)
-            except Exception as e:
-                logger.debug("BKT: EM拟合跳过 (%s): %s", concept, e)
+        # v4: 自动触发 EM 拟合（后台线程，每 10 次答题检查一次）
+        if node.total_attempts % 10 == 0 and node.total_attempts >= EM_MIN_OBSERVATIONS:
+            import threading
+            def _em_fit_bg():
+                try:
+                    estimate_params_from_node(node)
+                except Exception as e:
+                    logger.debug("BKT: EM拟合跳过 (%s): %s", concept, e)
+            threading.Thread(target=_em_fit_bg, daemon=True).start()
 
         logger.info(
             "BKT: %s 答%s → P=%.3f [%s] T=%.2f G=%.2f S=%.2F src=%s",
@@ -1036,11 +1051,14 @@ class BKTTracker:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _tracker_cache: dict[int, BKTTracker] = {}
+MAX_TRACKER_CACHE = 100
 
 
 def get_tracker(user_id: int = 0) -> BKTTracker:
     uid = user_id or 0
     if uid not in _tracker_cache:
+        if len(_tracker_cache) >= MAX_TRACKER_CACHE:
+            _tracker_cache.pop(next(iter(_tracker_cache)))
         _tracker_cache[uid] = BKTTracker(user_id=uid)
     return _tracker_cache[uid]
 
@@ -1112,8 +1130,13 @@ def sync_profile_to_bkt(user_id: int, kb: dict):
     tracker = get_tracker(user_id)
     init_count = 0
     for concept, score in kb.items():
-        if not concept or concept == "未分类" or not isinstance(concept, str):
+        if not concept or not isinstance(concept, str):
             continue
+        # 概念名规范化到 KG 词汇表，避免"未分类"坍缩
+        normalized = normalize_concept_name(concept)
+        if not normalized or normalized == "未分类":
+            continue
+        concept = normalized
         if concept in tracker.nodes:
             continue
         try:
@@ -1172,6 +1195,13 @@ def _load_kg_vocabulary() -> list[str]:
     return _kg_vocabulary
 
 
+def invalidate_kg_vocabulary():
+    """清除 KG 词汇表缓存 — 教材上传后调用"""
+    global _kg_vocabulary
+    _kg_vocabulary = None
+    logger.info("BKT: KG 词汇表缓存已清除，下次查询将重新加载")
+
+
 def _extract_specific(text: str, base_name: str) -> str | None:
     import re as _re
     if "C++" in base_name or "c++" in text.lower():
@@ -1210,26 +1240,37 @@ def normalize_concept_name(raw: str) -> str:
         if raw_lower == term.lower():
             return term
 
-    # 2. 包含匹配（术语在文本中出现）
+    # 2. 包含匹配（只接受"自信"的匹配，避免泛化短词被长术语吞并）
+    #    - term 出现在 raw 中：term 必须是有意义的概念（≥3字符，或≥2的中文）
+    #    - raw 是 term 的子串：raw 必须占 term 主体（≥0.6），即 term 只是 raw 的小幅扩写
+    #      （这样 "C++基础"→"C++基础语法" 成立，但 "算法"→"路由算法与路由协议" 被拒）
     best_match = None
     best_len = 0
     for term in vocab:
-        if term.lower() in raw_lower or raw_lower in term.lower():
-            if len(term) > best_len:
-                best_match = term
-                best_len = len(term)
+        tl = term.lower()
+        matched = False
+        if tl in raw_lower:
+            if len(term) >= 3 or (len(term) >= 2 and not term.isascii()):
+                matched = True
+        elif raw_lower in tl:
+            if len(raw_lower) / max(len(tl), 1) >= 0.6:
+                matched = True
+        if matched and len(term) > best_len:
+            best_match = term
+            best_len = len(term)
 
     if best_match:
         return best_match
 
-    # 3. 尝试提取子概念
+    # 3. 尝试提取子概念（同样要求 term 是出现在 specific 中的有意义概念）
     for domain_key in ["python", "c++", "cpp", "java", "数据结构", "算法", "数据库", "网络"]:
         if domain_key in raw_lower:
             specific = _extract_specific(raw, domain_key)
             if specific:
-                # 验证提取结果是否在词汇表中
+                spec_lower = specific.lower()
                 for term in vocab:
-                    if specific.lower() in term.lower() or term.lower() in specific.lower():
+                    tl = term.lower()
+                    if tl in spec_lower and (len(term) >= 3 or (len(term) >= 2 and not term.isascii())):
                         return term
 
     return "未分类"

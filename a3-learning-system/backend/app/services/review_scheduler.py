@@ -44,7 +44,7 @@ class ReviewSchedule:
         self.last_reviewed: Optional[datetime] = None
         self.interval_index: int = 0       # 当前间隔索引
         self.review_count: int = 0          # 总复习次数
-        self.memory_strength: float = 0.5   # 记忆强度 S（初始 0.5）
+        self.memory_strength: float = 4.0   # 记忆强度 S（初始 4.0 → 1天后约78%保留率）
         self._dirty: bool = False           # 标记是否有未持久化的变更
 
     @property
@@ -81,8 +81,8 @@ class ReviewSchedule:
         self.last_reviewed = datetime.now()
         self.interval_index = min(self.interval_index + 1, len(INTERVALS) - 1)
         self.review_count += 1
-        self.memory_strength += 0.15  # 每次复习增强记忆强度
-        self.memory_strength = min(self.memory_strength, 2.0)
+        self.memory_strength += 1.5   # 每次复习显著增强记忆强度
+        self.memory_strength = min(self.memory_strength, 20.0)
         self._dirty = True
 
     def to_dict(self) -> dict:
@@ -119,7 +119,7 @@ class ReviewScheduler:
                 s.last_reviewed = row.last_reviewed
                 s.interval_index = row.interval_index or 0
                 s.review_count = row.review_count or 0
-                s.memory_strength = row.memory_strength or 0.5
+                s.memory_strength = row.memory_strength or 4.0
                 s._dirty = False  # 从 DB 加载的，不需要回写
                 self.schedules[row.concept] = s
             if rows:
@@ -174,7 +174,14 @@ class ReviewScheduler:
         return self.schedules[concept]
 
     def record_review(self, concept: str):
-        """记录一次复习"""
+        """记录一次复习（概念名自动规范化）"""
+        try:
+            from app.services.bkt_service import normalize_concept_name
+            normalized = normalize_concept_name(concept)
+            if normalized and normalized != "未分类":
+                concept = normalized
+        except Exception:
+            pass
         s = self.get_or_create(concept)
         s.review()
         self.persist_to_db()
@@ -203,11 +210,14 @@ class ReviewScheduler:
 
 # 按 user_id 缓存 scheduler 实例（替代原来的全局单例）
 _scheduler_cache: dict[int, ReviewScheduler] = {}
+MAX_SCHEDULER_CACHE = 100
 
 
 def get_scheduler(user_id: int = 0) -> ReviewScheduler:
     """获取指定用户的复习调度器（带缓存和持久化）"""
     uid = user_id or 0
     if uid not in _scheduler_cache:
+        if len(_scheduler_cache) >= MAX_SCHEDULER_CACHE:
+            _scheduler_cache.pop(next(iter(_scheduler_cache)))
         _scheduler_cache[uid] = ReviewScheduler(user_id=uid)
     return _scheduler_cache[uid]

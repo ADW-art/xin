@@ -17,6 +17,7 @@ import logging
 import re
 
 from app.agents.state import AgentState
+from app.agents._msg_compat import last_msg_content, safe_get_content  # 兼容 checkpoint 恢复后 dict 格式
 from app.services.spark_client import SparkClient
 from app.services.bkt_service import get_tracker
 from app.services.rag_service import search_exercises
@@ -29,23 +30,27 @@ logger = logging.getLogger(__name__)
 # ============================================================
 # v3: 使用 functools.lru_cache 替代模块级 dict (自动淘汰 + 防内存泄漏)
 import functools
+import threading
+_cache_lock = threading.Lock()
 import time as _time
 
 _last_questions_cache: dict[int, tuple[str, float]] = {}  # {user_id: (text, timestamp)}
-_CACHE_TTL_SECONDS = 3600  # 1小时过期
+_CACHE_TTL_SECONDS = 86400  # 24小时过期（避免正常学习间隔导致答题上下文丢失）
 _MAX_CACHE_SIZE = 128
 
 def _evict_expired() -> None:
     """清除过期缓存条目"""
-    now = _time.time()
-    expired = [uid for uid, (_, ts) in _last_questions_cache.items() if now - ts > _CACHE_TTL_SECONDS]
-    for uid in expired:
-        del _last_questions_cache[uid]
+    with _cache_lock:
+        now = _time.time()
+        expired = [uid for uid, (_, ts) in _last_questions_cache.items() if now - ts > _CACHE_TTL_SECONDS]
+        for uid in expired:
+            del _last_questions_cache[uid]
 
 def cache_questions_text(user_id: int, text: str) -> None:
     """chat.py 在流式完成后调用，缓存完整题目文本供下次评阅使用"""
-    if user_id and text:
-        _evict_expired()  # 写入前清理过期条目
+    with _cache_lock:
+        if user_id and text:
+            _evict_expired()  # 写入前清理过期条目
         if len(_last_questions_cache) >= _MAX_CACHE_SIZE:
             # 淘汰最旧的条目
             oldest = min(_last_questions_cache.items(), key=lambda x: x[1][1])
@@ -147,6 +152,9 @@ QUESTION_PROMPT = """你是一个自适应出题专家，对标 LeetCode + 洛�
 3. 禁止选择题的干扰项用臆造概念 — 干扰项必须是真实常见错误
 4. 禁止代码题没有输入输出示例 — 每道代码题必须给定至少一组输入→输出
 5. 禁止"以下说法正确的是"这种万能模板 — 每个选项必须有具体的技术内容
+6. 禁止参考答案中的代码不能运行 — 答案代码必须可直接复制运行，不含占位符
+7. 禁止编造运行结果 — 代码输出必须是该代码逻辑确定的输出，不能猜测
+8. 禁止出超出指定语言标准库范围的题 — 只能用该语言官方文档中真实存在的API
 
 ## 题型与分布（共{count}道，必须全部出）
 
@@ -215,6 +223,96 @@ A. 选项A  B. 选项B  C. 选项C  D. 选项D （如果是选择题）
 > - 面向对象编程（类、继承、多态、虚函数）
 
 否则，回复结束后加上：
+> 请把你的答案发给我，格式如 "1A 2代码内容 3完整代码"，我会逐题批改并分析掌握情况
+
+---
+
+## 示例（标准出题模板）
+以下是一个合格的 question_agent 回复示例（假设初学Python，BKT难度=中等）：
+
+### 第 1 题 — 选择题 — 难度：中等 — 预计 3 分钟
+
+**考察知识点**：装饰器, 闭包, 函数对象
+
+下面代码的输出是什么？
+
+\`\`\`python
+def add_tag(tag):
+    def decorator(func):
+        def wrapper(*args):
+            return f"<{{tag}}>{{func(*args)}}</{{tag}}>"
+        return wrapper
+    return decorator
+
+@add_tag("b")
+def greet(name):
+    return f"Hello {{name}}"
+
+print(greet("Alice"))
+\`\`\`
+A. Hello Alice
+B. &lt;b&gt;Hello Alice&lt;/b&gt;
+C. &lt;tag&gt;Hello Alice&lt;/tag&gt;
+D. 报错，装饰器用法错误
+
+> **答案**：B
+> **解析**：
+> - A错误：忽略了装饰器添加的标签
+> - B正确：add_tag("b")返回decorator，@decorator作用于greet，wrapper在调用时包裹返回值为&lt;b&gt;...&lt;/b&gt;
+> - C错误：混淆了参数名"tag"和实际值"b"
+> - D错误：这是带参数的装饰器的标准用法，不会报错
+> 易错点：带参数装饰器需要三层嵌套函数。
+
+### 第 2 题 — 代码阅读 — 难度：中等 — 预计 5 分钟
+
+**考察知识点**：列表推导式, 闭包延迟绑定
+
+\`\`\`python
+funcs = []
+for i in range(3):
+    funcs.append(lambda x: x + i)
+
+print([f(10) for f in funcs])
+\`\`\`
+
+> **答案**：[12, 12, 12]
+> **解析**：循环结束后i=2，所有lambda中的i都引用同一个变量。列表推导式中的每个f都是lambda x: x+2，所以f(10)=12。
+> 易错点：Python的for循环不创建新的作用域，lambda中的自由变量延迟绑定到循环结束后的值。
+
+### 第 3 题 — 代码编写 — 难度：中等 — 预计 8 分钟
+
+**考察知识点**：装饰器, 时间测量, functools.wraps
+
+写一个 @timed 装饰器，打印函数执行时间(秒，保留2位小数)，并保留原函数的元信息。
+
+函数签名：
+\`\`\`python
+def timed(func):
+    # 你的代码
+    pass
+\`\`\`
+要求：
+- 打印格式: `函数名 耗时 X.XXs`
+- 使用 time.time() 计时
+- 保留 __name__ 和 __doc__
+
+> **答案**：
+> \`\`\`python
+> import time
+> from functools import wraps
+>
+> def timed(func):
+>     @wraps(func)
+>     def wrapper(*args, **kwargs):
+>         start = time.time()
+>         result = func(*args, **kwargs)
+>         elapsed = time.time() - start
+>         print(f"{{func.__name__}} 耗时 {{elapsed:.2f}}s")
+>         return result
+>     return wrapper
+> \`\`\`
+> **解析**：@wraps(func)保留元信息；time.time()计起始和结束时间差；wrapper返回原函数结果保证功能不变。
+
 > 请把你的答案发给我，格式如 "1A 2代码内容 3完整代码"，我会逐题批改并分析掌握情况"""
 
 
@@ -259,7 +357,7 @@ def question_agent_node(state: AgentState, spark: SparkClient) -> dict:
     state = dict(state)  # TypedDict → dict
     profile = state.get("user_profile") or {}
     context = state.get("context", {})
-    last_msg = state["messages"][-1].content if state["messages"] else ""
+    last_msg = last_msg_content(state.get("messages", []))
     user_id = state.get("user_id", 0)
 
     tracker = get_tracker(user_id)
@@ -271,8 +369,18 @@ def question_agent_node(state: AgentState, spark: SparkClient) -> dict:
     last_topic = last_output.get("topic", "")
     last_count = last_output.get("question_count", 3)
 
-    # 优先取 agent_outputs 中的题目文本，降级到内存缓存（Agent 不自行调 LLM 后由 chat.py 写入）
+    # 优先取 agent_outputs → 内存缓存 → 会话历史（从最近 assistant 消息中恢复题目）
     effective_questions_text = last_questions_text or _get_cached_questions(user_id)
+    if not effective_questions_text and is_answer_submission(last_msg) and len(state.get("messages", [])) >= 2:
+        # 缓存过期时尝试从对话历史中恢复最近一次出题（assistant 消息包含题目文本）
+        for m in reversed(state["messages"][:-1]):  # 排除最后一条（当前用户答案）
+            # Issue 3 Fix: 兼容 dict 和 BaseMessage 两种格式
+            m_role = m.get("role", "") if isinstance(m, dict) else getattr(m, "role", "")
+            m_content = safe_get_content(m)
+            if m_role == 'assistant' and m_content and isinstance(m_content, str) and '题目' in m_content[:200]:
+                effective_questions_text = m_content
+                logger.info("QuestionAgent: 从会话历史恢复题目文本 (len=%d)", len(m_content))
+                break
 
     if is_answer_submission(last_msg) and effective_questions_text:
         # ════════════════════════════════════

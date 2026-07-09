@@ -1,0 +1,12 @@
+﻿# confirm_result.yaml
+restatement: string       # 需求重述
+ambiguity_level: enum     # HIGH|MEDIUM|LOW|NONE
+complexity_score: int     # 0-100
+complexity_tier: enum     # SIMPLE|STANDARD|COMPLEX
+affected_files:
+  - file: string
+    scope: string         # 改动范围描述
+risk: string
+requires_plan: boolean
+disambiguation:
+  - string                # 需要用户澄清的问题

@@ -7,8 +7,26 @@
         <p>Dense(BGE-M3) + BM25(jieba) → RRF 融合 → CrossEncoder 精排 → LLM 生成</p>
       </div>
       <div class="rag-bar-r">
+        <el-upload
+          v-if="loggedIn"
+          :show-file-list="false"
+          :http-request="handleUpload"
+          :before-upload="beforeUpload"
+          accept=".pdf,.docx,.doc,.md,.txt"
+          :disabled="uploading"
+        >
+          <el-button :loading="uploading" :disabled="uploading">
+            <el-icon style="margin-right:4px"><UploadFilled /></el-icon>
+            {{ uploading ? '入库中...' : '上传教材' }}
+          </el-button>
+        </el-upload>
         <el-input v-model="q" placeholder="输入查询..." size="default" style="width:260px" @keydown.enter="search" clearable :disabled="ld" />
-        <el-button type="primary" @click="search" :loading="ld">{{ ld ? progressText : '执行追踪' }}</el-button>
+        <el-button type="primary" @click="search" :loading="ld" :disabled="ld">
+          <template v-if="!ragReady && !ld">
+            <el-icon class="is-loading" style="margin-right:4px"><Loading /></el-icon> 引擎启动中...
+          </template>
+          <template v-else>{{ ld ? progressText : '执行追踪' }}</template>
+        </el-button>
         <el-select v-model="preset" size="default" style="width:150px" placeholder="示例" @change="q=preset;search()" :disabled="ld">
           <el-option v-for="p in presets" :key="p" :label="p" :value="p" />
         </el-select>
@@ -117,21 +135,26 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted } from 'vue'
+import { ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import * as echarts from 'echarts'
+import { ElMessage } from 'element-plus'
+import type { UploadRequestOptions } from 'element-plus'
 import api from '@/api/index'
 import { useChatStore } from '@/stores/chat'
+import { useUserStore } from '@/stores/user'
 
 const cs = useChatStore()
+const us = useUserStore()
 const q = ref('')
 const preset = ref('')
 const ld = ref(false)
 const exp = ref<string|null>(null)
 const chartRef = ref<HTMLElement>()
 const errMsg = ref('')
-const loggedIn = ref(!!localStorage.getItem('token'))
+const loggedIn = ref(!!us.token)
 const progressPct = ref(0)
 const progressText = ref('')
+const ragReady = ref(false)
 
 const presets = ['Python装饰器','面向对象','二分查找','TCP三次握手','机器学习过拟合','B+树索引']
 
@@ -140,6 +163,49 @@ interface Stage { id: string; name: string; icon: string; color: string; badgeBg
 const trace = ref<Stage[]>([])
 const re = ref<R[]>([])
 const kb = ref(0); const ms = ref(0); const improvement = ref('—')
+
+// ── 教材上传入库 (POST /api/admin/upload, 表单字段名: file) ──
+const uploading = ref(false)
+
+function beforeUpload(file: File): boolean {
+  const okExt = ['.pdf', '.docx', '.doc', '.md', '.txt']
+  const lower = file.name.toLowerCase()
+  if (!okExt.some(ext => lower.endsWith(ext))) {
+    ElMessage.error('仅支持 PDF / Word / Markdown / TXT 文件')
+    return false
+  }
+  if (file.size > 20 * 1024 * 1024) {
+    ElMessage.error('文件过大，请控制在 20MB 以内')
+    return false
+  }
+  return true
+}
+
+async function handleUpload(options: UploadRequestOptions) {
+  uploading.value = true
+  const form = new FormData()
+  form.append('file', options.file)   // 后端 UploadFile 字段名为 file
+  try {
+    const { data } = await api.post('/admin/upload', form)
+    ElMessage.success(
+      `已入库《${data.title}》— 解析 ${data.paragraphs} 段，知识库共 ${data.knowledge_base_total} chunks`
+    )
+    // 立即用上传返回的总数刷新，并再拉一次权威统计
+    if (typeof data.knowledge_base_total === 'number') kb.value = data.knowledge_base_total
+    refreshKbStats()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '上传失败，请重试')
+  } finally {
+    uploading.value = false
+  }
+}
+
+async function refreshKbStats() {
+  try {
+    const { data } = await api.get('/admin/stats')
+    if (typeof data?.knowledge_base === 'number') kb.value = data.knowledge_base
+  } catch { /* 统计刷新失败不影响主流程 */ }
+}
 
 const hitRate = computed(() => re.value.filter(r=>r.score>=.8).length + '/' + re.value.length)
 const denseHitRate = computed(() => trace.value[0]?.stats?.max >= .8 ? '✓' : '✗')
@@ -221,7 +287,20 @@ function renderChart() {
   })
 }
 
+let _ragTimer = 0
+
+async function checkRagStatus() {
+  try {
+    const { data } = await api.get('/admin/rag-status')
+    if (data.rag_ready) { ragReady.value = true; return }
+  } catch {}
+  _ragTimer = setTimeout(checkRagStatus, 3000) as unknown as number
+}
+
+onBeforeUnmount(() => { if (_ragTimer) clearTimeout(_ragTimer) })
+
 onMounted(()=>{
+  checkRagStatus()
   if (!localStorage.getItem('token')) { loggedIn.value = false; return }
   // 恢复上次检索结果
   const saved = localStorage.getItem('rag_last_trace')
@@ -313,4 +392,37 @@ onMounted(()=>{
 .rr-hit-card.hl{background:rgba(139,92,246,.06);border:1px solid rgba(139,92,246,.2)}
 .rhc-v{font-size:var(--font-xs);color:var(--text-muted);display:block}
 .rhc-p{font-size:22px;font-weight:700;display:block;margin:4px 0}
+
+/* ═══════════ Responsive ═══════════ */
+@media (max-width: 768px) {
+  .rag-bar { flex-direction: column; gap: 10px; padding: 14px 16px 10px; }
+  .rag-bar-r { flex-wrap: wrap; gap: 8px; }
+  .rag-bar-r .el-input { width: 180px !important; }
+  .rag-bar-r .el-select { width: 120px !important; }
+  .rag-stats { flex-wrap: wrap; }
+  .rs-item { flex: 1 0 33%; margin-bottom: 6px; }
+  .rag-main { flex-direction: column; }
+  .rag-right { width: 100%; flex-shrink: 1; }
+  .rag-body { padding: 0 16px 16px; }
+}
+
+@media (max-width: 480px) {
+  .rag-bar { padding: 10px 12px 8px; }
+  .rag-bar-l h1 { font-size: 16px; }
+  .rag-bar-l p { font-size: 11px; }
+  .rag-bar-r { gap: 6px; }
+  .rag-bar-r .el-input { width: 140px !important; }
+  .rag-bar-r .el-select { width: 100px !important; }
+  .rag-bar-r .el-button { padding: 6px 10px !important; font-size: 11px !important; }
+  .rs-item { flex: 1 0 50%; }
+  .rs-v { font-size: 15px; }
+  .rs-l { font-size: 9px; }
+  .rt-card { margin-left: 28px; }
+  .rt-hd { padding: 8px 10px; }
+  .rt-name { font-size: 12px; }
+  .rt-badge { font-size: 9px; padding: 1px 7px; }
+  .rr-chart, .rr-hit { padding: 10px; }
+  .rr-hit-grid { flex-direction: column; }
+  .rte-row { gap: 4px; font-size: 10px; }
+}
 </style>

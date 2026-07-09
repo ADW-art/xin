@@ -1,0 +1,30 @@
+- generic [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - heading "A3 Learning" [level=1] [ref=e11]
+      - paragraph [ref=e12]: 个性化学习多智能体系统
+    - generic [ref=e13]:
+      - generic [ref=e14]:
+        - generic [ref=e15]: 用户名
+        - generic [ref=e18]:
+          - img [ref=e21]
+          - textbox "用户名" [ref=e23]:
+            - /placeholder: 请输入用户名
+      - generic [ref=e24]:
+        - generic [ref=e25]: 密码
+        - generic [ref=e28]:
+          - img [ref=e31]
+          - textbox "密码" [ref=e34]:
+            - /placeholder: 请输入密码
+          - img [ref=e37]
+      - generic [ref=e40]:
+        - generic [ref=e41] [cursor=pointer]:
+          - generic [ref=e42]:
+            - checkbox "记住用户名"
+          - generic [ref=e44]: 记住用户名
+        - generic [ref=e45] [cursor=pointer]: 忘记密码?
+      - button "登 录" [ref=e46] [cursor=pointer]:
+        - generic [ref=e47]: 登 录
+    - paragraph [ref=e48] [cursor=pointer]: 没有账号？去注册
+  - paragraph [ref=e49]: 科大讯飞 · A3 学习系统

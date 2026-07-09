@@ -239,4 +239,35 @@ onMounted(fetchData)
 .report { line-height: 1.8; }
 .report :deep(h3) { margin: 20px 0 10px; color: var(--text-primary); }
 .report :deep(pre) { background: #1E293B; color: #E2E8F0; border-radius: var(--radius-md); padding: 16px; border: 1px solid #334155; overflow-x: auto; }
+
+/* ═══════════ Responsive ═══════════ */
+@media (max-width: 768px) {
+  .page { padding: 20px 16px 36px; }
+  .hero h1 { font-size: 20px; }
+  .scores { grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .card { padding: 18px; }
+  .card h3 { font-size: 15px; }
+  .bkt-name { width: 70px; font-size: 11px; }
+}
+
+@media (max-width: 480px) {
+  .page { padding: 12px 10px 28px; }
+  .hero { margin-bottom: 16px; }
+  .hero h1 { font-size: 18px; }
+  .hero p { font-size: 12px; }
+  .scores { grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .score-card { padding: 12px 8px 10px; }
+  .score-card svg { width: 56px; }
+  .sl { font-size: 10px; }
+  .card { padding: 14px; margin-bottom: 12px; border-radius: var(--radius-md); }
+  .card h3 { font-size: 14px; margin-bottom: 10px; }
+  .bkt-row { gap: 6px; }
+  .bkt-name { width: 56px; font-size: 10px; }
+  .bkt-bar-wrap { height: 18px; }
+  .bkt-bar { font-size: 10px; line-height: 18px; }
+  .bkt-level { width: 36px; font-size: 10px; }
+  /* Table horizontal scroll on mobile */
+  .card :deep(.el-table) { font-size: 11px; }
+  .card :deep(.el-table__body-wrapper) { overflow-x: auto; }
+}
 </style>
