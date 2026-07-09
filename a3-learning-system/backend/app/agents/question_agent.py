@@ -468,6 +468,27 @@ def question_agent_node(state: AgentState, spark: SparkClient) -> dict:
             count=question_count,
         ) + ref_block
 
+        # QA 协作链修订模式：注入 evaluation_agent 的审核反馈到生成提示中
+        qa_stage = context.get('_qa_stage', '')
+        if qa_stage == 'revision':
+            eval_feedback = state.get('agent_outputs', {}).get('evaluation_agent', {})
+            if eval_feedback:
+                dims = eval_feedback.get('dimension_scores', {})
+                review_text = (eval_feedback.get('stream_buffer') or '')[:300]
+                dims_str = ', '.join(f'{k}={v}' for k, v in dims.items() if isinstance(v, (int, float)))
+                question_system += (
+                    '\n\n## QA 修订模式\n'
+                    '以下是评估 agent 对你上次生成题目的评审反馈，请根据反馈修订题目：\n'
+                    f'- 维度评分: {dims_str}\n'
+                    f'- 评审意见: {review_text}\n'
+                    f'要求：保持原题量({question_count}题)，修正不准确表述，确保难度匹配，'
+                    f'补充缺失知识点覆盖。在输出中标注 [修订版] 以区分。\n'
+                )
+                logger.info(
+                    'QuestionAgent: QA 修订模式注入 feedback dims=%s topic=%s',
+                    dims_str, context.get('topic', topic),
+                )
+
         # 画像引导注入 — 新用户首次使用时收集画像
         from app.core.shared_utils import _build_profile_guide
         profile_guide = _build_profile_guide(profile)

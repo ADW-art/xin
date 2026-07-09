@@ -654,6 +654,48 @@ def supervisor_node(state: AgentState, spark: SparkClient) -> dict:
 
         # ══════════════════════════════════════
         # 闭环检测: BKT变化 / Evaluation薄弱维度 → 自动路径重规划
+        # ══════════════════════════════════════
+        # QA 协作链 (A→B→A): question_agent → evaluation_agent → question_agent
+        # supervisor 检测 qa_join 合并后的 _qa_stage 决定下一步路由
+        # ══════════════════════════════════════
+        if current_agent == "qa_join":
+            ctx = state.get("context", {})
+            qa_stage = ctx.get("_qa_stage", "")
+            merged_ao = state.get("agent_outputs", {})
+
+            if qa_stage == "first_review":
+                # question_agent 首次生成完成 → 路由到 evaluation_agent 审核
+                if merged_ao.get("question_agent"):
+                    logger.info("Supervisor: QA 协作链 生成完成(question_agent) → evaluation_agent 审核")
+                    return {
+                        "current_agent": "supervisor",
+                        "next_agent": "evaluation_agent",
+                        "context": {**ctx, "_qa_stage": "reviewing"},
+                        "stream_buffer": "",
+                    }
+
+            elif qa_stage == "reviewing":
+                # evaluation_agent 审核完成 → 路由回 question_agent 修正
+                if merged_ao.get("evaluation_agent"):
+                    logger.info("Supervisor: QA 协作链 审核完成(evaluation_agent) → question_agent 修正")
+                    return {
+                        "current_agent": "supervisor",
+                        "next_agent": "question_agent",
+                        "context": {**ctx, "_qa_stage": "revision"},
+                        "stream_buffer": "",
+                    }
+
+            elif qa_stage == "revision":
+                # question_agent 修正完成 → 结束
+                if merged_ao.get("question_agent"):
+                    logger.info("Supervisor: QA 协作链 修正完成(question_agent) → END")
+                    return {
+                        "current_agent": "supervisor",
+                        "next_agent": "END",
+                        "context": {**ctx, "_qa_stage": ""},
+                        "stream_buffer": "",
+                    }
+
         if current_agent == "evaluation_agent":
             eval_out = agent_outputs.get("evaluation_agent", {})
             weak_dims = eval_out.get("dimension_scores", {})
@@ -818,7 +860,7 @@ def supervisor_node(state: AgentState, spark: SparkClient) -> dict:
     route_map = {
         "profile": "profile_agent",
         "resource": "collaborative_resource",  # v4: 并行协同(生成+质检)
-        "question": "collaborative_qa",        # v4: 并行协同(出题+审题)
+        "question": "question_agent",          # QA 协作链 (A→B→A): question_agent → evaluation_agent → question_agent
         "path": "collaborative_path",          # v4: 并行协同(规划+预生成)
         "evaluation": "evaluation_agent",
         "chat": "chat_agent",
@@ -826,6 +868,10 @@ def supervisor_node(state: AgentState, spark: SparkClient) -> dict:
     }
     next_agent = route_map.get(intent, "chat_agent")
     context_result = result.get("params", {})
+    # QA 协作链 (A→B→A): question 路由到 question_agent 时设置 _qa_stage
+    if intent == "question":
+        context_result = {"_qa_stage": "first_review", **context_result}
+        logger.info("Supervisor: QA 协作链 初始化 _qa_stage=first_review")
 
     # ══════════════════════════════════════
     # 教学流程初始化: 广泛学习请求 → path_agent 构建教学序列

@@ -15,6 +15,16 @@ from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage
 
 
+def _last_value_reducer(old, new):
+    """Reducer: 并行节点更新同一字段时,取最新值(覆盖式)
+
+    解决 LangGraph 报错: 'At key current_agent: Can receive only one value per step'
+    原因: Send API 并行执行时,多个节点都尝试更新 current_agent
+    解决: 用 reducer 接受最新值(后运行的覆盖先运行的)
+    """
+    return new
+
+
 class AgentState(BaseModel):
     """多智能体共享状态 — Pydantic v2 验证
 
@@ -26,8 +36,9 @@ class AgentState(BaseModel):
     messages: Annotated[list[BaseMessage], add_messages] = Field(default_factory=list)
 
     # ── Agent 路由 ──
-    current_agent: str = "supervisor"       # 当前激活的 Agent
-    next_agent: Optional[str] = None        # Supervisor 的路由决策
+    # 用 reducer 接受并行节点更新: 协同节点 (qa_join/rc_join/path_join) 都会写 current_agent
+    current_agent: Annotated[str, _last_value_reducer] = "supervisor"  # 当前激活的 Agent
+    next_agent: Annotated[Optional[str], _last_value_reducer] = None     # Supervisor 的路由决策
 
     # ── 用户上下文 ──
     user_profile: Optional[dict] = None     # 6维学习画像 (从 MySQL 加载)
