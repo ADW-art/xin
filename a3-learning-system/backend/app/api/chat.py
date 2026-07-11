@@ -9,6 +9,7 @@ import uuid
 import logging
 import asyncio
 import re
+import time  # P1-A 2026-07-11
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Depends, Header
@@ -52,6 +53,7 @@ class ImageInput(BaseModel):
 class ChatRequest(BaseModel):
     content: str = Field(..., min_length=1, description="用户输入的消息")
     images: list[ImageInput] | None = Field(default=None, description="多模态：用户上传的图片列表（最多4张）")
+    regenerate: bool = Field(default=False, description="是否为重新生成请求（跳过重复用户消息入库）")
 
     @field_validator("content")
     @classmethod
@@ -403,7 +405,7 @@ async def chat_send(
     else:
         user_msg = HumanMessage(content=request.content)
 
-    config = {"configurable": {"thread_id": f"user-{user_id}"}, "recursion_limit": 50}
+    config = {"configurable": {"thread_id": f"user-{user_id}"}, "recursion_limit": 100}
 
     # 从 checkpoint 恢复 teaching_context（跨轮次持久化）
     prev_teaching_ctx = None
@@ -417,6 +419,11 @@ async def chat_send(
                 logger.info("SSE: 恢复教学流程 state (current=%d/%d)",
                             prev_teaching_ctx.get("current_index", 0) + 1,
                             len(prev_teaching_ctx.get("active_path", [])))
+                # P1-FIX v2: 使用共享 is_teaching_continue（含模糊节点匹配），替代简单标记列表
+                from app.core.shared_utils import is_teaching_continue
+                if not is_teaching_continue(request.content.strip(), prev_teaching_ctx):
+                    logger.info("P1-FIX: 非继续消息，清除跨会话残留 teaching_context (msg=%s)", request.content.strip()[:40])
+                    prev_teaching_ctx = None
     except Exception as _e:
         logger.debug("SSE: 获取 checkpoint 教学状态失败（新用户正常）: %s", _e)
 
@@ -425,6 +432,21 @@ async def chat_send(
     _pac = prev_context.get("profile_ask_count", 0)
     _pfd = prev_context.get("profile_first_done", False)
     _restored_context = {**prev_context}
+
+    # P1-FIX (P1-B 集中化 2026-07-11): 清除 checkpoint 残留的一次性标志
+    # 原因: 之前会话设置的 init_teaching / teaching_continue / replan_path 等
+    # 会被 LangGraph 持久化到 checkpoint, 跨会话继承 → 用户问"学习计划"时被误触发
+    # 自动教学 26 节点循环 (历史 bug: user-1 跑了 11+ 节点仍卡在生成中)
+    # 集中管理: 新增一次性标志只需修改 app/agents/_stale_flags.py
+    from app.agents._stale_flags import STALE_ONE_SHOT_FLAGS
+    _cleaned_flags = []
+    for _flag in STALE_ONE_SHOT_FLAGS:
+        if _flag in _restored_context:
+            _restored_context.pop(_flag, None)
+            _cleaned_flags.append(_flag)
+    if _cleaned_flags:
+        logger.info("P1-FIX: 清除跨会话残留的一次性标志 %s", _cleaned_flags)
+
     if _lpa < 5:
         _restored_context["last_profile_ask_at"] = _lpa + 1
         logger.debug("P1-1: last_profile_ask_at 递增: %d -> %d (ask_count=%d, done=%s)",
@@ -443,9 +465,14 @@ async def chat_send(
         "teaching_context": prev_teaching_ctx,
     }
 
-    if user_id:
+    # U-03: 重新生成时跳过重复用户消息入库（原消息已在DB中）
+    _user_msg_id = 0
+    if user_id and not request.regenerate:
         with get_session() as db:
-            db.add(Conversation(user_id=user_id, role="user", content=request.content))
+            _user_msg = Conversation(user_id=user_id, role="user", content=request.content)
+            db.add(_user_msg)
+            db.flush()
+            _user_msg_id = _user_msg.id
 
     async def event_stream():
         prev_agent = "supervisor"
@@ -455,15 +482,31 @@ async def chat_send(
         _agent_switch_count = 0
 
         try:
+            # P1-A 2026-07-11: astream 整体超时 90s, 防止 RAG/LLM 复合阻塞
+            _AAGENT_TIMEOUT = 90
+            _astream_start = time.time()
             async for update in graph.astream(initial_state, config, stream_mode="updates"):
+                if time.time() - _astream_start > _AAGENT_TIMEOUT:
+                    logger.warning("SSE: astream 整体超过 %ds, 强制结束", _AAGENT_TIMEOUT)
+                    error_msg = "\n\n（响应超时，请稍后重试或简化问题）"
+                    assistant_content += error_msg
+                    yield f"event: v1.message\ndata: {json.dumps({'content': error_msg, 'agent': 'system', 'type': 'timeout'}, ensure_ascii=False)}\n\n"
+                    break
                 for node_name, node_update in update.items():
                     if node_name == "__end__":
                         continue
                     agent_name = node_name
 
+                    # P1-D 2026-07-11: 死循环防护 - 同一 agent 切换超过 8 次强制结束
                     if agent_name != prev_agent:
                         _agent_switch_count += 1
-                        yield f"event: agent_switch\ndata: {json.dumps({'from': prev_agent, 'to': agent_name}, ensure_ascii=False)}\n\n"
+                        if _agent_switch_count > 15:
+                            logger.error("SSE: agent_switch > 15 次, 疑似死循环, 强制结束 (last=%s)", agent_name)
+                            error_msg = "\n\n（检测到异常循环，已自动终止，请刷新页面重试）"
+                            assistant_content += error_msg
+                            yield f"event: v1.message\ndata: {json.dumps({'content': error_msg, 'agent': 'system', 'type': 'loop_guard'}, ensure_ascii=False)}\n\n"
+                            break
+                        yield f"event: v1.agent_switch\ndata: {json.dumps({'from': prev_agent, 'to': agent_name}, ensure_ascii=False)}\n\n"
                         prev_agent = agent_name
                         # Only track worker agents as the "assistant agent" — supervisor is a router
                         if agent_name != "supervisor":
@@ -479,10 +522,10 @@ async def chat_send(
                         _collab_agents_map = {
                             "qa_parallel": ["question_agent", "evaluation_agent"],
                             "resource_parallel": ["resource_agent", "quality_reviewer"],
-                            "path_parallel": ["path_agent", "resource_agent"],
+                            "path_parallel": ["path_agent", "prefetch_agent"],
                         }
                         _collab_agents = _collab_agents_map.get(_collab_mode, [agent_name])
-                        yield f"event: collaboration\ndata: {json.dumps({'type': 'collaboration', 'action': 'parallel', 'agents': _collab_agents, 'primary': agent_name}, ensure_ascii=False)}\n\n"
+                        yield f"event: v1.collaboration\ndata: {json.dumps({'type': 'collaboration', 'action': 'parallel', 'agents': _collab_agents, 'primary': agent_name}, ensure_ascii=False)}\n\n"
 
                     _resource_meta = agent_output.get(agent_name, {})
                     if _resource_meta and "type" in _resource_meta and agent_name == "resource_agent":
@@ -507,16 +550,24 @@ async def chat_send(
                         except Exception as _re:
                             logger.warning("SSE: 资源占位创建失败: %s", _re)
                         # 发射 resource_ready（携带真实 resource_id，可立即使用）
-                        yield f"event: resource_ready\ndata: {json.dumps({'type': 'resource_ready', 'resource_id': _r_id, 'resource_type': _r_type, 'title': _r_title}, ensure_ascii=False)}\n\n"
+                        yield f"event: v1.resource_ready\ndata: {json.dumps({'type': 'resource_ready', 'resource_id': _r_id, 'resource_type': _r_type, 'title': _r_title}, ensure_ascii=False)}\n\n"
 
                     pending = agent_output.get(agent_name, {}).get("stream_pending")
                     if pending:
                         try:
                             from app.utils.content_guard import StreamGuard
-                            guard = StreamGuard()
+                            guard = StreamGuard(check_interval=60)
+                            # P1-FIX: plan 检测只对 resource_agent 生效
+                            # (修复: path_agent 输出"学习计划"被误判 → SSE 卡死, 前端"生成中...")
+                            # chat.py line 575, 594 已经有 agent_name == "resource_agent" 限制,
+                            # 但 StreamGuard.feed 内部的累积检查没这个限制, 导致 path_agent 输出
+                            # "Python 学习计划" 时第 60 字符就被 plan_detected=True 阻断, 后续 chunk 全部丢失
+                            if agent_name != "resource_agent":
+                                guard._guard.is_learning_plan_output = lambda _t: False
                             chunk_count = 0
                             estimated_total = max(1, pending.get("max_tokens", 2048) // 3)
-                            yield f"event: progress\ndata: {json.dumps({'stage': 'generating', 'agent': agent_name, 'progress': 0, 'message': '正在生成...'}, ensure_ascii=False)}\n\n"
+                            _milestones = {1, 3, 10, 20, 30, 50, 80, 120, 180, 250}
+                            yield f"event: v1.progress\ndata: {json.dumps({'stage': 'generating', 'agent': agent_name, 'progress': 0, 'message': '正在生成...'}, ensure_ascii=False)}\n\n"
                             async for chunk in _bridge_stream(
                                 spark,
                                 pending["messages"],
@@ -530,21 +581,28 @@ async def chat_send(
                                     if safe_chunk is not None:
                                         assistant_content += safe_chunk
                                         chunk_count += 1
-                                        yield f"event: message\ndata: {json.dumps({'content': safe_chunk, 'agent': agent_name}, ensure_ascii=False)}\n\n"
-                                        if chunk_count % 50 == 0:
+                                        yield f"event: v1.message\ndata: {json.dumps({'content': safe_chunk, 'agent': agent_name}, ensure_ascii=False)}\n\n"
+                                        if chunk_count in _milestones or (chunk_count > 250 and chunk_count % 50 == 0):
                                             pct = min(90, int(chunk_count / estimated_total * 100))
-                                            yield f"event: progress\ndata: {json.dumps({'stage': 'generating', 'agent': agent_name, 'progress': pct}, ensure_ascii=False)}\n\n"
+                                            yield f"event: v1.progress\ndata: {json.dumps({'stage': 'generating', 'agent': agent_name, 'progress': pct}, ensure_ascii=False)}\n\n"
                             if guard.blocked:
                                 logger.warning("SSE: %s 输出被内容安全守卫拦截", agent_name)
                                 safe_fallback = guard.get_safe_content()
                                 assistant_content = safe_fallback
-                                yield f"event: message\ndata: {json.dumps({'content': safe_fallback, 'agent': agent_name}, ensure_ascii=False)}\n\n"
-                            yield f"event: progress\ndata: {json.dumps({'stage': 'complete', 'agent': agent_name, 'progress': 100}, ensure_ascii=False)}\n\n"
+                                yield f"event: v1.message\ndata: {json.dumps({'content': safe_fallback, 'agent': agent_name}, ensure_ascii=False)}\n\n"
+                            elif agent_name == "resource_agent" and guard.finalize():
+                                logger.warning("SSE: %s 流式输出被anti-plan检测拦截", agent_name)
+                                safe_fallback = guard.get_safe_content()
+                                assistant_content = safe_fallback
+                                yield f"event: v1.message\ndata: {json.dumps({'content': safe_fallback, 'agent': agent_name}, ensure_ascii=False)}\n\n"
+                            yield f"event: v1.progress\ndata: {json.dumps({'stage': 'complete', 'agent': agent_name, 'progress': 100}, ensure_ascii=False)}\n\n"
                         except Exception as stream_err:
                             logger.warning("SSE: %s 流式输出异常: %s", agent_name, stream_err)
                             error_msg = f"\n（{agent_name} 输出中断，请稍后重试）"
                             assistant_content += error_msg
-                            yield f"event: message\ndata: {json.dumps({'content': error_msg, 'agent': agent_name}, ensure_ascii=False)}\n\n"
+                            yield f"event: v1.message\ndata: {json.dumps({'content': error_msg, 'agent': agent_name}, ensure_ascii=False)}\n\n"
+                            # P2-D 2026-07-11: 通知前端 LLM 失败, 可显示重试按钮
+                            yield f"event: v1.system_notice\ndata: {json.dumps({'type': 'agent_error', 'agent': agent_name, 'error': str(stream_err)[:200]}, ensure_ascii=False)}\n\n"
                         continue
 
                     buf = node_update.get("stream_buffer", "")
@@ -553,34 +611,49 @@ async def chat_send(
                         guard = get_guard()
                         safe, warning = guard.check(buf)
                         if safe:
-                            assistant_content += buf
-                            yield f"event: message\ndata: {json.dumps({'content': buf, 'agent': agent_name}, ensure_ascii=False)}\n\n"
+                            # resource_agent + path_agent: 检测计划/课程表模式输出
+                            if agent_name == "resource_agent" and guard.is_learning_plan_output(buf):
+                                logger.warning("SSE: %s buffer被anti-plan检测拦截", agent_name)
+                                safe_msg = "抱歉，生成的内容格式不符合当前教学模式要求。\n\n正在为您重新生成聚焦于该知识点的讲解内容，请稍候..."
+                                assistant_content += safe_msg
+                                yield f"event: v1.message\ndata: {json.dumps({'content': safe_msg, 'agent': agent_name}, ensure_ascii=False)}\n\n"
+                                # P2-B 2026-07-11: 通知前端内容被调整
+                                yield f"event: v1.system_notice\ndata: {json.dumps({'type': 'plan_filtered', 'reason': '检测到学习计划结构, 已替换为引导文案', 'original_len': len(buf)}, ensure_ascii=False)}\n\n"
+                            else:
+                                assistant_content += buf
+                                yield f"event: v1.message\ndata: {json.dumps({'content': buf, 'agent': agent_name}, ensure_ascii=False)}\n\n"
                         else:
                             safe_msg = guard.get_safe_content() if hasattr(guard, 'get_safe_content') else "抱歉，生成的内容未通过安全检查。请换一种方式提问。"
                             assistant_content += safe_msg
-                            yield f"event: message\ndata: {json.dumps({'content': safe_msg, 'agent': agent_name}, ensure_ascii=False)}\n\n"
+                            yield f"event: v1.message\ndata: {json.dumps({'content': safe_msg, 'agent': agent_name}, ensure_ascii=False)}\n\n"
 
-                    # P2-1: 路径动态重规划 → 推送 path_update 结构化事件 + 解释消息
-                    _pa_out = agent_output.get("path_agent", {})
-                    if _pa_out.get("teaching_stage") == "replanned":
-                        _new = _pa_out.get("new_unlocked", [])
-                        _skip = _pa_out.get("skipped", [])
-                        _current_node = _pa_out.get("current_node", "")
-                        _reason_parts = []
-                        if _skip:
-                            _reason_parts.append(f"已掌握: {'、'.join(_skip)}")
-                        if _new:
-                            _reason_parts.append(f"新解锁: {'、'.join(_new)}")
-                        if _reason_parts:
-                            _reason_text = "通过BKT追踪发现，" + "、".join(_skip) + " 的掌握概率已超过阈值，因此跳过并解锁了 " + "、".join(_new) + " 个新节点"
-                            yield (
-                                "event: path_update\n"
-                                f"data: {json.dumps({'action': 'replanned', 'new_unlocked': _new, 'skipped': _skip, 'current_node': _current_node, 'reason': _reason_text}, ensure_ascii=False)}\n\n"
-                            )
-                            _joined_reasons = "\n> ".join(_reason_parts)
-                            _explain_msg = "\n\n> **路径更新**\n> " + _joined_reasons + "\n> 学习路径已自动调整，进入下一阶段学习。\n"
-                            assistant_content += _explain_msg
-                            yield f"event: message\ndata: {json.dumps({'content': _explain_msg, 'agent': 'system', 'type': 'explanation'}, ensure_ascii=False)}\n\n"
+                    # P2-1: 路径动态重规划 → 推送 path_update 结构化事件 (仅 path_agent 节点，避免 path_join 重复)
+                    if agent_name == "path_agent":
+                        _pa_out = agent_output.get("path_agent", {})
+                        if _pa_out.get("teaching_stage") == "replanned":
+                            _new = _pa_out.get("new_unlocked", [])
+                            _skip = _pa_out.get("skipped", [])
+                            _current_node = _pa_out.get("current_node", "")
+                            _reason_parts = []
+                            if _skip:
+                                _reason_parts.append(f"已掌握: {'、'.join(_skip)}")
+                            if _new:
+                                _reason_parts.append(f"新解锁: {'、'.join(_new)}")
+                            if _reason_parts:
+                                if _skip and _new:
+                                    _reason_text = "通过BKT追踪发现，" + "、".join(_skip) + " 的掌握概率已超过阈值，因此跳过并解锁了 " + "、".join(_new) + " 个新节点"
+                                elif _skip:
+                                    _reason_text = "通过BKT追踪发现，" + "、".join(_skip) + " 的掌握概率已超过阈值，已跳过这些节点"
+                                else:
+                                    _reason_text = "通过BKT追踪发现，新解锁了 " + "、".join(_new) + " 个节点"
+                                yield (
+                                    "event: v1.path_update\n"
+                                    f"data: {json.dumps({'action': 'replanned', 'new_unlocked': _new, 'skipped': _skip, 'current_node': _current_node, 'reason': _reason_text}, ensure_ascii=False)}\n\n"
+                                )
+                                _joined_reasons = "\n> ".join(_reason_parts)
+                                _explain_msg = "\n\n> **路径更新**\n> " + _joined_reasons + "\n> 学习路径已自动调整，进入下一阶段学习。\n"
+                                assistant_content += _explain_msg
+                                yield f"event: v1.message\ndata: {json.dumps({'content': _explain_msg, 'agent': 'system', 'type': 'explanation'}, ensure_ascii=False)}\n\n"
 
                     # [已删除] 全Agent英文饼图 — 仅 evaluation_agent 保留中文饼图(见下方)
 
@@ -607,7 +680,7 @@ async def chat_send(
                     if total > 0:
                         mm = f"\n\n```mermaid\npie title 知识点掌握分布 (共{total}个)\n    \"已掌握(>=70%)\" : {mastered}\n    \"学习中(35-70%)\" : {learning}\n    \"入门(<35%)\" : {beginner}\n```\n"
                         assistant_content += mm
-                        yield f"event: message\ndata: {json.dumps({'content': mm, 'agent': 'evaluation_agent'}, ensure_ascii=False)}\n\n"
+                        yield f"event: v1.message\ndata: {json.dumps({'content': mm, 'agent': 'evaluation_agent'}, ensure_ascii=False)}\n\n"
                 except Exception:
                     pass
             # 资源生成：追加 Mermaid 知识点分布图
@@ -624,7 +697,7 @@ async def chat_send(
                             lines_mm = [f'    "{name}": {score}' for name, score in sorted_kb]
                             mm = "\n\n`mermaid\npie title 知识点覆盖分布\n" + "\n".join(lines_mm) + "\n`\n"
                             assistant_content += mm
-                            yield f"event: message\ndata: {json.dumps({'content': mm, 'agent': 'resource_agent'}, ensure_ascii=False)}\n\n"
+                            yield f"event: v1.message\ndata: {json.dumps({'content': mm, 'agent': 'resource_agent'}, ensure_ascii=False)}\n\n"
                 except Exception:
                     pass
 
@@ -633,7 +706,7 @@ async def chat_send(
                 try:
                     mm = "\n\n`mermaid\npie title 题目难度分布\n    \"\u57fa\u7840\" : 40\n    \"\u4e2d\u7b49\" : 35\n    \"\u56f0\u96be\" : 25\n`\n"
                     assistant_content += mm
-                    yield f"event: message\ndata: {json.dumps({'content': mm, 'agent': 'question_agent'}, ensure_ascii=False)}\n\n"
+                    yield f"event: v1.message\ndata: {json.dumps({'content': mm, 'agent': 'question_agent'}, ensure_ascii=False)}\n\n"
                 except Exception:
                     pass
 
@@ -645,9 +718,9 @@ async def chat_send(
             summary = _generate_learning_summary(user_id, assistant_agent, _captured_outputs)
             if summary:
                 assistant_content += summary
-                yield f"event: message\ndata: {json.dumps({'content': summary, 'agent': assistant_agent, 'type': 'summary'}, ensure_ascii=False)}\n\n"
+                yield f"event: v1.message\ndata: {json.dumps({'content': summary, 'agent': assistant_agent, 'type': 'summary'}, ensure_ascii=False)}\n\n"
 
-            yield f"event: done\ndata: {json.dumps({'status': 'complete', 'agent_switches': _agent_switch_count})}\n\n"
+            yield f"event: v1.done\ndata: {json.dumps({'status': 'complete', 'agent_switches': _agent_switch_count})}\n\n"
 
             if user_id and assistant_content:
                 with get_session() as db2:
@@ -673,10 +746,10 @@ async def chat_send(
                     sg_list = (profile or {}).get('suggestions', []) or []
                     if sg_list:
                         latest = sg_list[-1]
-                        yield f"event: suggestion\ndata: {json.dumps(latest, ensure_ascii=False)}\n\n"
+                        yield f"event: v1.suggestion\ndata: {json.dumps(latest, ensure_ascii=False)}\n\n"
                         # v5: auto_trigger → 推送资源预取事件，前端可提前加载首个节点资源
                         if latest.get("auto_trigger") and latest.get("intent") == "resource":
-                            yield f"event: prefetch\ndata: {json.dumps({'type': 'resource_prefetch', 'node': latest.get('topic', ''), 'status': 'queued'}, ensure_ascii=False)}\n\n"
+                            yield f"event: v1.prefetch\ndata: {json.dumps({'type': 'resource_prefetch', 'node': latest.get('topic', ''), 'status': 'queued'}, ensure_ascii=False)}\n\n"
                 except Exception:
                     pass
             # ═══════════════════════════════════════════════════════════
@@ -691,7 +764,7 @@ async def chat_send(
                     if due_nodes:
                         high_risk = [n for n in due_nodes if n["risk"] == "high"]
                         yield (
-                            "event: review_due\n"
+                            "event: v1.review_due\n"
                             f"data: {json.dumps({'total': len(due_nodes), 'high_risk': len(high_risk), 'items': due_nodes[:5]}, ensure_ascii=False)}\n\n"
                         )
                 except Exception:
@@ -699,6 +772,17 @@ async def chat_send(
 
         except Exception as e:
             logger.error("SSE: event_stream 异常: %s", e, exc_info=True)
+            # 流失败时清理孤立的用户消息记录（无对应 assistant 回复）
+            if _user_msg_id and not assistant_content:
+                try:
+                    with get_session() as _cleanup_db:
+                        _orphan = _cleanup_db.query(Conversation).filter(Conversation.id == _user_msg_id).first()
+                        if _orphan:
+                            _cleanup_db.delete(_orphan)
+                            _cleanup_db.flush()
+                            logger.info("SSE: 已清理孤立用户消息 id=%d", _user_msg_id)
+                except Exception as _ce:
+                    logger.warning("SSE: 清理孤立消息失败: %s", _ce)
             err_type = type(e).__name__
             err_msg = str(e)
             # P1-2: 细化错误分类，参考 LangChain/LangGraph 错误处理
@@ -724,9 +808,9 @@ async def chat_send(
             import uuid
             trace_id = uuid.uuid4().hex[:12]
             logger.error("SSE: 错误追踪 trace_id=%s type=%s code=%s", trace_id, err_type, err_code)
-            yield f"event: error\ndata: {json.dumps({'message': user_friendly, 'code': err_code, 'trace_id': trace_id, 'detail': err_msg[:200]}, ensure_ascii=False)}\n\n"
+            yield f"event: v1.error\ndata: {json.dumps({'message': user_friendly, 'code': err_code, 'trace_id': trace_id, 'detail': err_msg[:200]}, ensure_ascii=False)}\n\n"
             # P1-2: 补一个 done 事件让前端能正确清理 loading 状态
-            yield f"event: done\ndata: {json.dumps({'status': 'error', 'agent_switches': _agent_switch_count}, ensure_ascii=False)}\n\n"
+            yield f"event: v1.done\ndata: {json.dumps({'status': 'error', 'agent_switches': _agent_switch_count}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         event_stream(),

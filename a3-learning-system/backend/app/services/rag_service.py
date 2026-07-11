@@ -31,6 +31,11 @@ from app.config import settings
 if settings.hf_mirror:
     os.environ["HF_ENDPOINT"] = settings.hf_mirror
 
+# P1-FIX: 调高 huggingface_hub 默认 timeout (默认 10s 太短, hf-mirror.com 偶尔抖动就超时)
+# 设置后 CrossEncoder / SentenceTransformer 内部下载会使用这个 timeout
+os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "60")  # 单次请求 timeout 60s
+os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "0")   # 禁用 hf_transfer, 避免额外依赖
+
 from huggingface_hub import configure_http_backend
 from app.core.chroma_client import add_to_collection, search_in_collection
 
@@ -281,11 +286,6 @@ _embed_ready: bool = False  # BGE 就绪标志 — 未就绪时 Agent 跳过 RAG
 _bge_loading: bool = False  # BGE 模型加载中标志 — 前端轮询用
 
 
-def is_rag_ready() -> bool:
-    """检查 RAG 是否就绪 (BGE 模型已加载)"""
-    return _embed_ready
-
-
 def is_bge_loading() -> bool:
     """检查 BGE 模型是否正在加载中"""
     return _bge_loading
@@ -454,26 +454,69 @@ def is_rag_ready() -> bool:
 
 
 def _get_reranker():
-    """BGE-Reranker-v2-m3 交叉编码器（精排用）"""
+    """BGE-Reranker-v2-m3 交叉编码器（精排用）
+
+    加载策略（与 BGE-M3 一致）:
+      1. 本地路径优先 (reranker_local_path)
+      2. HF 在线下载（最多 3 次重试，指数退避 1s/3s/9s）
+      3. 全部失败 → 返回 None, RAG 自动降级 (不阻塞响应)
+
+    修复: 增加本地路径 + 重试 + 快速失败, 避免 hf-mirror.com 网络超时卡住
+    之前现象: 首次 RAG 检索时 CrossEncoder 内部 HEAD 请求 read timeout=10s
+              + 1s 重试间隔 × 5 = 55s 阻塞 (P1-FIX 2026-07-11)
+    """
     if not _lazy_import_st():
         return None
     global _reranker
-    if _reranker is None:
-        reranker_name = "BAAI/bge-reranker-v2-m3"
-        # 设备检测：与 BGE-M3 保持一致
-        _device = settings.embedding_device
-        try:
-            import torch
-            if _device == "cuda" and not torch.cuda.is_available():
-                _device = "cpu"
-        except Exception:
+    if _reranker is not None:
+        return _reranker
+
+    reranker_name = getattr(settings, "reranker_model", "BAAI/bge-reranker-v2-m3")
+    local_path = getattr(settings, "reranker_local_path", "").strip()
+
+    # 设备检测：与 BGE-M3 保持一致
+    _device = settings.embedding_device
+    try:
+        import torch
+        if _device == "cuda" and not torch.cuda.is_available():
             _device = "cpu"
-        logger.info("RAG: 加载 Reranker %s (device=%s) ...", reranker_name, _device)
-        # monkey-patch 已禁用 low_cpu_mem_usage（由 _get_dense_model 触发）
-        _reranker = CrossEncoder(reranker_name, trust_remote_code=True)
-        if _device != "cpu":
-            _reranker.model = _reranker.model.to(_device)
-        logger.info("RAG: Reranker 加载完成 (device=%s)", _device)
+    except Exception:
+        _device = "cpu"
+
+    # ── 策略1: 本地路径优先 ──
+    if local_path and os.path.isdir(local_path):
+        logger.info("RAG: 从本地路径加载 Reranker %s (device=%s) ...", local_path, _device)
+        try:
+            _reranker = CrossEncoder(local_path, trust_remote_code=True)
+            if _device != "cpu":
+                _reranker.model = _reranker.model.to(_device)
+            logger.info("RAG: Reranker 本地加载完成 (device=%s)", _device)
+            return _reranker
+        except Exception as e:
+            logger.warning("RAG: Reranker 本地路径加载失败, 降级到 HF 下载: %s", e)
+
+    # ── 策略2: HF 模型名（最多 3 次重试，指数退避 1s/3s/9s）──
+    import time as _time
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        logger.info("RAG: 加载 Reranker %s (HF模式, 第 %d/%d 次)...", reranker_name, attempt, max_retries)
+        try:
+            _reranker = CrossEncoder(reranker_name, trust_remote_code=True)
+            if _device != "cpu":
+                _reranker.model = _reranker.model.to(_device)
+            logger.info("RAG: Reranker 加载完成 (HF模式, 第%d次成功, device=%s)", attempt, _device)
+            return _reranker
+        except Exception as e:
+            logger.warning("RAG: Reranker 加载失败 (第%d/%d次): %s", attempt, max_retries, e)
+            if attempt < max_retries:
+                wait = 3 ** (attempt - 1)  # 1s, 3s, 9s
+                logger.info("RAG: %d秒后重试...", wait)
+                _time.sleep(wait)
+            else:
+                logger.error("RAG: Reranker 加载最终失败, RAG 将跳过 rerank 步骤 (降级)")
+
+    # ── 策略3: 全部失败 → 返回 None, 不阻塞 RAG ──
+    _reranker = None
     return _reranker
 
 
@@ -952,7 +995,8 @@ def search_exercises(query: str, difficulty: str = None, n: int = 5) -> list[dic
             if len(docs) >= n:
                 break
         return docs
-    except Exception:
+    except Exception as e:
+        logger.warning("Exercise search failed: %s", e)
         return []
 
 

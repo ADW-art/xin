@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 
 from app.agents.state import AgentState
 from app.agents._msg_compat import last_msg_content  # 兼容 checkpoint 恢复后 dict 格式
+from app.agents._teaching_gate import should_init_teaching  # P0-B 2026-07-11
 from app.services.bkt_service import get_tracker
 from app.services.dynamic_path_planner import build_planner_from_db
 from app.services.knowledge_graph import get_graph
@@ -39,8 +40,8 @@ PATH_PROMPT = """你是一个学习路径规划专家，风格对标 Coursera �
 ## 可用知识点（知识图谱节点 — 必须从中选择，禁止编造）
 {kg_nodes}
 
-## 反幻觉铁律（违反即为不合格）
-1. 禁止编造不在上述KG节点列表中的知识点 — 所有建议知识点必须来自KG
+## 反幻觉铁律（违反即不合格，输出将被丢弃）
+1. 禁止编造不在上述KG节点列表中的知识点 — 所有建议知识点必须来自KG，任意一个不在KG中的知识点将导致整条输出被丢弃
 2. 禁止编造虚假的时间估算 — 每阶段时长必须基于 weekly_hours 和节点数计算
 3. 禁止凭空推荐外部资源 — 不推荐具体书籍/课程/网站（KG可能没有这些数据）
 4. 禁止捏造知识点间的依赖关系 — 前置依赖必须来自KG的edges数据
@@ -166,7 +167,7 @@ def _compute_review_schedule_for_path(
     checkpoints: list[dict] = []
     today = datetime.now()
 
-    for concept in concepts[:20]:  # 上限 20 个避免输出膨胀
+    for idx, concept in enumerate(concepts[:20]):  # 上限 20 个避免输出膨胀
         s = scheduler.get_or_create(concept)
 
         if s.last_reviewed is not None:
@@ -181,15 +182,17 @@ def _compute_review_schedule_for_path(
                 "memory_strength": round(s.memory_strength, 3),
             })
         else:
-            # 新概念 → 按间隔序列投射未来复习日期
+            # 新概念 → 按间隔序列投射未来复习日期（按阶段错开起始日）
             projected: list[dict] = []
             cumulative = 0
             intervals = INTERVALS[:5]  # [1, 3, 7, 14, 30]
+            # 按概念在路径中的位置错开起始复习日：前 5 个概念从 day 2 开始，后 5 个从 day 4 开始
+            start_offset = (idx // 5) * 2 + 1
             for interval in intervals:
                 cumulative += interval
-                review_date = today + timedelta(days=cumulative)
+                review_date = today + timedelta(days=start_offset + cumulative)
                 projected.append({
-                    "day": cumulative,
+                    "day": start_offset + cumulative,
                     "date": review_date.isoformat()[:10],
                     "interval": interval,
                 })
@@ -213,7 +216,8 @@ def _collect_bkt_state(user_id: int) -> dict:
         from app.services.bkt_service import get_tracker
         tracker = get_tracker(user_id)
         return tracker.get_all_scores()
-    except Exception:
+    except Exception as e:
+        logger.warning("BKT state collection failed for user %s: %s", user_id, e)
         return {}
 
 
@@ -300,7 +304,8 @@ def _load_single_domain_kg(kg, filename: str) -> int:
                 kg.edges.setdefault(src, set()).add(tgt)
                 kg.in_degree[tgt] = kg.in_degree.get(tgt, 0) + 1
         return len(data.get("nodes", []))
-    except Exception:
+    except Exception as e:
+        logger.warning("KG file loading failed '%s': %s", filename, e)
         return 0
 
 
@@ -378,8 +383,13 @@ def _build_dag_stages(topo_order: list[str], known_concepts: set[str], weekly_ho
     if not topo_order:
         return []
     # 每阶段 3-5 个概念, 每个概念 2-4 小时
+    # P1: 小KG(节点<5)时每个概念独立成阶段，避免2节点被合并为1阶段
+    total = len(topo_order)
+    if total < 5:
+        concepts_per_stage = 1
+    else:
+        concepts_per_stage = max(3, min(5, total // 3))
     stages = []
-    concepts_per_stage = max(3, min(5, len(topo_order) // 3))
     for i in range(0, len(topo_order), concepts_per_stage):
         batch = topo_order[i:i + concepts_per_stage]
         hours = len(batch) * 3  # 每概念 3 小时估算
@@ -416,6 +426,63 @@ def _compute_review_schedule(stages: list[dict]) -> list[dict]:
             })
         schedule.append({"stage": stage["stage"], "reviews": reviews})
     return schedule
+
+
+def _validate_path_output(llm_output: str, known_concepts: list[str], stages: list[dict]) -> tuple[bool, list[str], str]:
+    """校验 LLM 生成的路径输出是否编造了不存在的知识点
+
+    Returns:
+        (is_valid, foreign_concepts, cleaned_output_or_error)
+        is_valid=False 表示检测到编造内容
+    """
+    if not llm_output or not known_concepts:
+        return True, [], llm_output
+
+    known_set = {c.lower().strip() for c in known_concepts}
+    # 从 LLM 输出中提取可能的"知识点"引用: 中文引号、加粗、列表项中的技术术语
+    import re as _vre
+    candidates = set()
+    # 匹配 **粗体** 或 「」中的文本
+    for m in _vre.finditer(r'\*\*(.+?)\*\*|「(.+?)」|`(.+?)`', llm_output):
+        candidates.add((m.group(1) or m.group(2) or m.group(3)).strip())
+    # 匹配 - 或数字. 开头的列表项中的核心术语
+    for m in _vre.finditer(r'(?:^|\n)\s*[-•\d]\.?\s*\*?\*?(.+?)\*?\*?(?:\s*[:：\-—])', llm_output, _vre.MULTILINE):
+        term = m.group(1).strip()
+        if len(term) <= 30:
+            candidates.add(term)
+
+    foreign = []
+    for cand in candidates:
+        cand_lower = cand.lower().strip()
+        if len(cand_lower) < 2:
+            continue
+        # 检查是否在已知概念列表中
+        if cand_lower not in known_set:
+            # 模糊匹配: 检查是否有已知概念包含此候选或此候选包含已知概念
+            matched = False
+            for kc in known_set:
+                if len(kc) >= 3 and (kc in cand_lower or cand_lower in kc):
+                    matched = True
+                    break
+            if not matched:
+                # 过滤常见中文描述词（非知识点）
+                common_words = {"学习", "阶段", "基础", "进阶", "高级", "核心", "知识点", "概念",
+                                "掌握", "理解", "了解", "复习", "实践", "项目", "练习", "小时",
+                                "目标", "内容", "计划", "路径", "时间", "安排", "建议"}
+                if cand_lower not in common_words:
+                    foreign.append(cand)
+
+    if foreign:
+        logger.warning("PathAgent: _validate_path_output 检测到 %d 个编造知识点: %s",
+                       len(foreign), foreign[:10])
+        # 尝试清理: 从输出中移除编造术语（保守策略：只在明显位置替换）
+        cleaned = llm_output
+        for f_term in foreign[:5]:
+            cleaned = cleaned.replace(f"**{f_term}**", f"(参考: {f_term})")
+            cleaned = cleaned.replace(f"「{f_term}」", f"(参考: {f_term})")
+        return False, foreign, cleaned
+
+    return True, [], llm_output
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -629,6 +696,14 @@ def _teaching_advance(state: dict, tc: dict) -> dict:
         logger.info("PathAgent(teaching): node='%s' 已在 completed_nodes 中，跳过重复标记", current_node)
 
     next_index = current_index + 1
+
+    # 教学引用跳转: 用户指定了具体第X天 → 跳转到目标索引
+    target_index = state.get("context", {}).get("teach_target_index")
+    if target_index is not None and isinstance(target_index, int) and 0 <= target_index < len(active_path):
+        if target_index != next_index:
+            logger.info("PathAgent(teaching): 教学跳转 %d → %d (node='%s')",
+                         current_index, target_index, active_path[target_index])
+            next_index = target_index
 
     # 防御: next_index 必须严格大于 current_index
     if next_index <= current_index:
@@ -858,6 +933,7 @@ def path_agent_node(state: AgentState, spark: SparkClient) -> dict:
         return {
             "current_agent": "path_agent",
             "stream_buffer": "",
+            "teaching_context": None,
             "agent_outputs": {**state.get("agent_outputs", {}), "path_agent": {"teaching_stage": "no_change"}},
         }
 
@@ -869,7 +945,7 @@ def path_agent_node(state: AgentState, spark: SparkClient) -> dict:
         if tc.get("mode") == "teaching":
             return _teaching_advance(state, tc)
 
-    if context.get("init_teaching"):
+    if context.get("init_teaching") and should_init_teaching(state, context):  # P0-B 2026-07-11
         tc = state.get("teaching_context") or {}
         if not tc or tc.get("mode") != "teaching":
             return _teaching_init(state, topic)
@@ -886,7 +962,7 @@ def path_agent_node(state: AgentState, spark: SparkClient) -> dict:
         exclude_text = "、".join(user_constraints)
         topic = f"{topic}（排除：{exclude_text}）"
 
-    weekly_raw = profile.get("weekly_hours") or 5
+    weekly_raw = profile.get("weekly_hours")
     weekly = float(weekly_raw) if weekly_raw is not None else 5.0
 
     # 初始化变量（防止 UnboundLocalError）
@@ -929,7 +1005,7 @@ def path_agent_node(state: AgentState, spark: SparkClient) -> dict:
             if due_reviews:
                 review_lines = ["\n## 复习提醒（艾宾浩斯遗忘曲线）", ""]
                 for r in due_reviews:
-                    risk_label = {"high": "立即复习", "medium": "近期复习", "low": "跟踪"}[r["risk"]]
+                    risk_label = {"high": "立即复习", "medium": "近期复习", "low": "跟踪"}.get(r["risk"], "跟踪")
                     review_lines.append(f"- **{r['concept']}**：记忆保留率 {r['retention']:.0%}，{risk_label}")
                 review_text = "\n".join(review_lines)
 
@@ -954,31 +1030,44 @@ def path_agent_node(state: AgentState, spark: SparkClient) -> dict:
                     all_path_concepts, scheduler
                 )
 
-                # 构建 DAG 规划富文本（注入 LLM 提示词）
-                dag_lines = ["", "## DAG 动态规划结果（BKT + 知识图谱拓扑排序）", ""]
+                # 构建 DAG 规划数据（注入 LLM 提示词，但去掉 debug 内部信息）
+                dag_lines = ["", "## 学习路径（阶段规划）", ""]
                 dag_lines.append(
-                    f"- 算法: {dag_plan.get('algorithm', 'dynamic_bkt_v2')}"
-                )
-                dag_lines.append(
-                    f"- 总节点: {dag_plan.get('total_nodes', 0)}，"
+                    f"- 共 {dag_plan.get('total_nodes', 0)} 个知识点，"
                     f"已掌握: {dag_plan.get('mastered_count', 0)}"
                 )
                 dag_lines.append("")
                 for phase in dag_plan.get("phases", []):
+                    phase_topics = phase.get("topics", [])
                     dag_lines.append(
                         f"### 阶段 {phase['phase']}: "
-                        f"{', '.join(phase['topics'][:5])}"
+                        f"{', '.join(phase_topics[:5])}"
                     )
-                    dag_lines.append(f"- 知识点数: {phase['count']}")
+                    _hours = phase.get("estimated_hours", 0)
+                    _weeks = phase.get("estimated_weeks", 0)
+                    # R-03: 动态规划器输出不含 estimated_hours/weeks，按知识点数估算
+                    if not _hours and not _weeks:
+                        _hours = max(1, len(phase_topics) * 1.5)
+                        _weeks = max(1, round(_hours / max(weekly, 1)))
+                    dag_lines.append(f"- 知识点数: {len(phase_topics)} | 预计 {_hours:.0f} 小时 | 约 {_weeks} 周")
 
                 if dag_plan.get("next_topics"):
                     dag_lines.append(
                         f"\n**现在可以开始学习**: "
                         f"{', '.join(dag_plan['next_topics'][:5])}"
                     )
-                if dag_plan.get("weak_points"):
+                # P2-03: 冷启动降级 — 新用户无 BKT 数据时给出初学者友好提示
+                if dag_plan.get("mastered_count", 0) == 0:
                     dag_lines.append(
-                        f"\n**重点关注（薄弱环节）**: "
+                        f"\n**学习建议**: 这是你的第一个学习路径，从第一阶段开始循序渐进。"
+                        f"每个阶段完成后可通过做题检验掌握程度，系统将自动调整后续路径。"
+                    )
+                elif dag_plan.get("weak_points"):
+                    # U-04: BKT 数据不足时避免"薄弱环节"标签 — 新手答1-2题就标记薄弱不合理
+                    _bkt_total = dag_plan.get("total_nodes", 0)
+                    _label = "重点关注（薄弱环节）" if _bkt_total >= 5 else "建议重点学习"
+                    dag_lines.append(
+                        f"\n**{_label}**: "
                         f"{', '.join(dag_plan['weak_points'])}"
                     )
 
@@ -1019,35 +1108,38 @@ def path_agent_node(state: AgentState, spark: SparkClient) -> dict:
         logger.warning("PathAgent: 知识图谱路径生成失败，回退到 LLM: %s", e)
         review_lines = ["\n## 复习提醒（艾宾浩斯遗忘曲线）", ""]
         for r in due_reviews:
-            risk_label = {"high": "立即复习", "medium": "近期复习", "low": "跟踪"}[r["risk"]]
+            risk_label = {"high": "立即复习", "medium": "近期复习", "low": "跟踪"}.get(r["risk"], "跟踪")
             review_lines.append(f"- **{r['concept']}**：记忆保留率 {r['retention']:.0%}，{risk_label}")
         review_text = "\n".join(review_lines)
 
     # 兜底：知识图谱无数据时用 LLM 生成
     messages = None
+    no_kg_fallback = None  # 无 KG 时的直接输出文本（不经过 LLM）
     # 准备公共变量：对话历史和用户消息，供两种路径使用
     all_msgs = state.get("messages", [])
     last_user_msg = last_msg_content(state.get("messages", []), default=topic)
-    topic_ctx = context.get("topic_context", {})
 
     if kg_path_text:
-        # 将 DAG 动态规划 + 复习时间表注入 LLM 提示词
-        full_kg_text = kg_path_text
+        # 使用 DAG 动态规划数据作为 prompt 主数据（包含阶段+复习），
+        # 避免 kg_path_text 与 dag_path_enrichment 两套阶段信息冲突
         if dag_path_enrichment:
-            full_kg_text += "\n" + dag_path_enrichment
-
-        # 画像引导注入
-        from app.core.shared_utils import _build_profile_guide
-        profile_guide = _build_profile_guide(profile)
+            full_kg_text = dag_path_enrichment
+        else:
+            full_kg_text = kg_path_text
 
         kg_polish_system = (
-            "你是一个学习路径规划专家。以下是由知识图谱拓扑排序和 BKT "
-            "动态路径规划算法联合生成的学习路径。请你润色为一份清晰易懂的"
-            "学习计划——保持阶段顺序不变，用热情专业的语气逐阶段说明学习"
-            "内容和目标，提及复习时间节点。\n\n" + full_kg_text
+            "你是一个学习路径规划专家。以下是由知识图谱和 BKT 算法"
+            "生成的学习路径。请你润色为一份清晰易懂的学习计划。\n\n"
+            "【铁律 — 违反将导致输出被丢弃】\n"
+            "1. 知识点名称必须与下方完全一致，禁止翻译/改写/合并/拆分/添加\n"
+            "2. 阶段数量、阶段名称、每个阶段的知识点列表不可改变\n"
+            "3. 禁止引入下方未列出的任何概念、术语、技术名词\n"
+            "4. 禁止发明'Web开发''数据分析''深度学习'等不在下方阶段列表中的阶段名\n"
+            "5. 禁止将内部算法信息（如算法名、DAG动态规划等）输出给用户\n"
+            "6. 禁止使用套话模板（如'通过实际案例来学习'、'练习解决实际问题'），每阶段必须给出该阶段特有的学习目标\n"
+            "7. 输出前逐项核对：每个知识点名称是否与原文一字不差\n\n"
+            + full_kg_text
         )
-        if profile_guide:
-            kg_polish_system += profile_guide
 
         # 携带对话历史，帮助 LLM 理解用户上下文
         from app.core.shared_utils import _build_llm_messages
@@ -1067,7 +1159,8 @@ def path_agent_node(state: AgentState, spark: SparkClient) -> dict:
             try:
                 tracker = get_tracker(state.get("user_id", 0))
                 known = set(tracker.get_mastered())
-            except Exception:
+            except Exception as e:
+                logger.warning("BKT mastered nodes retrieval failed for user %s: %s", state.get("user_id", 0), e)
                 pass
             # 过滤已知节点, 保留待学节点
             remaining = [n for n in topo_nodes if n not in known]
@@ -1098,14 +1191,30 @@ def path_agent_node(state: AgentState, spark: SparkClient) -> dict:
                     plan_lines.append(f"- 阶段{sr['stage']}: {reviews_str}")
 
             full_kg_text = "\n".join(plan_lines)
+
+            # P1-05: 生成后二次校验 — 验证所有知识点是否在KG中、阶段数是否一致
+            is_valid, invalid_concepts, validation_msg = _validate_path_output(
+                full_kg_text, remaining, dag_stages
+            )
+            if not is_valid:
+                logger.warning("PathAgent: _validate_path_output 检测到编造知识点: %s", invalid_concepts)
+                # 使用清理后的文本替换原始输出
+                full_kg_text = validation_msg
+
             kg_polish_system = (
                 "你是一个学习路径规划专家。以下是由知识图谱拓扑排序算法自动生成的学习路径。"
                 "请润色为清晰的学习计划——保持阶段顺序、知识点名称和数量不变, "
                 "用热情专业的语气逐阶段说明学习内容和目标。\n\n"
-                "⚠️ 禁止: 增加/删除/重命名知识点, 改变阶段顺序, 编造数字。\n\n" + full_kg_text
+                "【铁律 — 违反将导致输出被丢弃】\n"
+                "1. 知识点名称必须与下方完全一致，禁止翻译/改写/合并/拆分/添加\n"
+                "2. 阶段数量、每个阶段的知识点列表不可改变\n"
+                "3. 禁止引入下方未列出的任何概念、术语、技术名词\n"
+                "4. 只做语言润色：加说明、加目标、加复习提示\n"
+                "5. 输出前逐项核对：每个知识点名称是否与原文一字不差\n"
+                f"6. 禁止使用'第X周/第X天'扁平列表格式 — 保留原DAG阶段结构({len(dag_stages)}个阶段)\n"
+                "7. 每个阶段必须标注前置依赖关系（如'前置: XXX'），体现学习路径的拓扑顺序\n"
+                "8. 输出格式：每个阶段独立一节，包含\"前置\" → \"知识点\" → \"目标\" → \"检验\"四个部分\n\n" + full_kg_text
             )
-            if profile_guide:
-                kg_polish_system += profile_guide
 
             from app.core.shared_utils import _build_llm_messages
             messages = _build_llm_messages(
@@ -1116,23 +1225,43 @@ def path_agent_node(state: AgentState, spark: SparkClient) -> dict:
                 topic_context=topic_ctx,
             )
         else:
-            # 最后兜底: 无 KG 数据 → 基于画像知识库生成简单计划
+            # 无 KG 数据: 不调用 LLM 编造内容，直接返回引导消息
+            from app.core.shared_utils import _get_profile_status
+            filled_dims, _ = _get_profile_status(profile)
             kb = profile.get("knowledge_base", {})
             if isinstance(kb, dict) and kb:
                 concepts = sorted(kb.keys(), key=lambda k: kb.get(k, 0) if isinstance(kb.get(k), (int, float)) else 50, reverse=True)
-                fallback = f"## 学习建议: {topic}\n\n基于你的知识基础, 建议按以下顺序学习:\n\n" + "\n".join(f"- {c}" for c in concepts[:10])
+                no_kg_fallback = f"## 学习建议: {topic}\n\n基于你的知识基础, 建议按以下顺序学习:\n\n" + "\n".join(f"- {c}" for c in concepts[:10])
+            elif len(filled_dims) < 2:
+                no_kg_fallback = (
+                    f"## 学习路径: {topic}\n\n"
+                    f"你的学习画像尚未建立，知识图谱中也没有足够的数据来生成个性化学习路径。\n\n"
+                    f"请先告诉我:\n"
+                    f"- 你想学习什么方向？（如 Python、Java、算法等）\n"
+                    f"- 你目前的基础如何？（零基础 / 有一定了解 / 比较熟悉）\n\n"
+                    f"有了这些信息，我就能为你规划一条适合的学习路线。"
+                )
             else:
-                fallback = f"## 学习建议: {topic}\n\n你的知识基础尚未建立。从对话学习或上传教材开始, 系统将为你生成个性化学习路径。"
-            messages = [{"role": "system", "content": fallback}, {"role": "user", "content": last_user_msg[:200]}]
+                no_kg_fallback = (
+                    f"## 学习路径: {topic}\n\n"
+                    f"该领域的知识图谱数据暂不完整，无法生成结构化的学习路径。\n\n"
+                    f"建议你先通过对话学习或资源浏览积累基础，系统会在知识图谱更新后自动生成个性化路径。\n\n"
+                    f"你也可以尝试:\n"
+                    f"- 换个更具体的学习方向提问\n"
+                    f"- 让我推荐一些入门资源\n"
+                    f"- 做几道练习题测试当前水平"
+                )
+            messages = None  # 不调用 LLM，直接使用 stream_buffer 输出
 
     # Token 截断：防止路径文本过长导致 API 超限
-    from app.utils.llm_helper import truncate_messages
-    messages = truncate_messages(messages, max_tokens=6000)
+    if messages:
+        from app.utils.llm_helper import truncate_messages
+        messages = truncate_messages(messages, max_tokens=6000)
 
     logger.info("PathAgent: 准备流式生成学习路径")
 
     # 预生成兜底文本（如果 LLM 返回空）
-    fallback_path = f"## 学习路径：{topic}\n\n基于你的知识图谱分析，推荐以下学习顺序：\n\n1. 先巩固基础概念\n2. 逐步学习进阶主题\n3. 通过练习巩固所学\n\n如需更详细的计划，可以告诉我具体想学的内容。"
+    fallback_path = no_kg_fallback if no_kg_fallback else f"## 学习路径：{topic}\n\n基于你的知识图谱分析，推荐以下学习顺序：\n\n1. 先巩固基础概念\n2. 逐步学习进阶主题\n3. 通过练习巩固所学\n\n如需更详细的计划，可以告诉我具体想学的内容。"
 
     # ═══════════════════════════════════════════════════════════════
     # Fix 3: 构建结构化输出 — 供前端 LearningPathView 渲染 DAG 图和复习时间表
@@ -1147,14 +1276,19 @@ def path_agent_node(state: AgentState, spark: SparkClient) -> dict:
     path_output: dict = {
         "topic": topic,
         "algorithm": algorithm,
-        "stream_pending": {
+    }
+    if messages:
+        # 非教学模式(无 init_teaching)的独立学习计划限制 1024 tokens
+        # 防止 LLM 填充编造避免 54 天计划 + PGDCP 幻觉循环
+        _is_teaching = context.get("init_teaching") or context.get("teaching_continue")
+        _plan_max_tokens = 4096 if _is_teaching else 1024
+        path_output["stream_pending"] = {
             "messages": messages,
             "temperature": 0.5,
-            "max_tokens": 4096,
+            "max_tokens": _plan_max_tokens,
             "use_safe": True,
             "chunk_size": 2,
-        },
-    }
+        }
 
     # 如果有 DAG 规划结果，附加结构化数据供前端渲染
     if dag_plan:
@@ -1184,11 +1318,13 @@ def path_agent_node(state: AgentState, spark: SparkClient) -> dict:
 
     return {
         "current_agent": "path_agent",
-        "stream_buffer": "",
         "agent_outputs": {
             **state.get("agent_outputs", {}),
             "path_agent": path_output,
         },
-        # 兜底：如果 stream_pending 无法产出内容，使用此文本
-        "stream_buffer": fallback_path,
+        # P0-fix: 正常规划(非教学)清除残留 teaching_context，防止 checkpoint 污染
+        # 导致 path_join handler 误判 mode=="teaching" 触发教学自动推进链
+        "teaching_context": None,
+        # 仅当 LLM 未产出 stream_pending 时使用兜底文本
+        "stream_buffer": "" if path_output.get("stream_pending") else fallback_path,
     }

@@ -49,10 +49,12 @@ def truncate_messages(
     messages: list[dict],
     max_tokens: int = 3500,
     keep_system: bool = True,
+    max_single_message_tokens: int = 1500,
 ) -> list[dict]:
     """截断消息列表以控制 token 数量
 
-    策略：
+    策略（P2-FIX 2026-07-11, 修复 13→1 激进截断问题）:
+      0. 先截断过长的单条消息 (RAG 检索结果/代码块常 > 3000 tokens)
       1. 始终保留 system prompt
       2. 从最旧的消息开始截断（保留最近的上下文）
       3. 单条消息截断到合理长度
@@ -61,10 +63,36 @@ def truncate_messages(
         messages: 原始消息列表
         max_tokens: 最大允许 token 数（默认 3500，留空间给输出）
         keep_system: 是否保留 system 消息
+        max_single_message_tokens: 单条消息最大 token (默认 1500, 防止 RAG 大 content 撑爆)
 
     Returns:
         截断后的消息列表
     """
+    if count_messages_tokens(messages) <= max_tokens:
+        return messages
+
+    # ── 步骤 0: 截短过长的单条消息（防止 RAG/代码块撑爆总 token）──
+    # 之前: 1 条 RAG 检索结果 4000 tokens + 12 条历史对话各 200 tokens = 6400 tokens
+    #       会被激进 pop 到只剩 1 条, 12 条历史对话全丢
+    # 现在: 先把 4000 tokens 的 RAG 截到 1500, 总变成 3900, 保留 12 条历史
+    for msg in messages:
+        content = msg.get("content", "")
+        if isinstance(content, str) and estimate_tokens(content) > max_single_message_tokens:
+            # 保留前 N 字符 (粗略, 因为 estimate_tokens 是估算)
+            # 假设 1.5 token/字 (中文), 反推 1500 token ≈ 1000 字
+            char_limit = int(max_single_message_tokens / 1.5)  # 保守按中文最密
+            if len(content) > char_limit:
+                # P2-C 2026-07-11: 保留头尾 (sliding window), 比纯头部保留更多信息
+                head_chars = int(char_limit * 0.7)
+                tail_chars = char_limit - head_chars
+                msg["content"] = (
+                    content[:head_chars]
+                    + "\n\n...（中间内容已省略）...\n\n"
+                    + content[-tail_chars:] if len(content) > char_limit else content
+                )
+                logger.debug("LLM Helper: 单条消息 sliding 截断 %d → %d 字符 (head=%d, tail=%d)",
+                             len(content), head_chars + tail_chars + 20, head_chars, tail_chars)
+
     if count_messages_tokens(messages) <= max_tokens:
         return messages
 
@@ -79,7 +107,11 @@ def truncate_messages(
             result.append(msg)
 
     # 从旧到新逐步丢弃历史，直到 token 数满足要求
-    while result and count_messages_tokens(result) > (max_tokens - (estimate_tokens(system_msg.get("content", "")) if system_msg else 0)):
+    system_tokens = estimate_tokens(system_msg.get("content", "")) if system_msg else 0
+    threshold = max_tokens - system_tokens
+    # 防御: 如果 system 比 max_tokens 还大, 至少给 result 留一条空间
+    threshold = max(threshold, 100)
+    while result and count_messages_tokens(result) > threshold:
         result.pop(0)
 
     # 如果还是太长，截断最后一条用户/AI 消息的内容
