@@ -3,19 +3,67 @@
 用途: 当 init_teaching / teaching_continue 等被错误继承时,
      在不杀 uvicorn 的情况下强制重置这些标志
 
-用法: python scripts/clean_checkpoint_stale_flags.py [user_id]
+用法:
+  python scripts/clean_checkpoint_stale_flags.py [user_id]   # 清理 user_id (默认 1)
+  python scripts/clean_checkpoint_stale_flags.py --list      # 列出所有 checkpoint
+  python scripts/clean_checkpoint_stale_flags.py --help      # 显示帮助
 """
 import sys
 import os
 import pickle
+import argparse
 
 
 def main():
-    sys.path.insert(0, r"E:\code\claude-1\a3-learning-system\backend")
+    parser = argparse.ArgumentParser(
+        description="清理 LangGraph checkpoint 中残留的一次性标志",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="示例:\n"
+               "  python scripts/clean_checkpoint_stale_flags.py 1        # 清理 user-1\n"
+               "  python scripts/clean_checkpoint_stale_flags.py --list   # 列出所有 checkpoints\n"
+               "  python scripts/clean_checkpoint_stale_flags.py --all    # 清理所有 user"
+    )
+    parser.add_argument("user_id", type=int, nargs="?", default=None,
+                        help="要清理的 user_id (默认 1)")
+    parser.add_argument("--list", action="store_true", help="列出所有 checkpoints")
+    parser.add_argument("--all", action="store_true", help="清理所有 user")
+    args = parser.parse_args()
 
+    sys.path.insert(0, r"E:\code\claude-1\a3-learning-system\backend")
     from app.checkpoint_sqlite import SqliteSaver
 
-    USER_ID = int(sys.argv[1]) if len(sys.argv) > 1 else 1
+    # --list 模式
+    if args.list:
+        import sqlite3
+        db_path = r"E:\code\claude-1\a3-learning-system\backend\data\checkpoints.db"
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        cur.execute("SELECT DISTINCT thread_id FROM writes")
+        thread_ids = [r[0] for r in cur.fetchall()]
+        print(f"=== Checkpoint threads ({len(thread_ids)}) ===")
+        for tid in thread_ids:
+            # thread_id 格式: "user-X-..."
+            user_part = tid.split("-")[1] if "-" in tid else "?"
+            print(f"  {tid} (user-{user_part})")
+        conn.close()
+        return
+
+    if args.all:
+        # 清理所有 user
+        import sqlite3
+        db_path = r"E:\code\claude-1\a3-learning-system\backend\data\checkpoints.db"
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        cur.execute("SELECT DISTINCT thread_id FROM writes")
+        thread_ids = [r[0] for r in cur.fetchall()]
+        for tid in thread_ids:
+            user_part = int(tid.split("-")[1]) if "-" in tid and tid.split("-")[1].isdigit() else 1
+            print(f"=== 清理 thread {tid} (user-{user_part}) ===")
+        print(f"\n共 {len(thread_ids)} 个 thread, 请单独用 user_id 清理")
+        conn.close()
+        return
+
+    USER_ID = args.user_id if args.user_id is not None else 1
     print(f"=== 清理 user-{USER_ID} 的 checkpoint ===")
 
     # 直接用 sqlite3 操作 blobs 表
