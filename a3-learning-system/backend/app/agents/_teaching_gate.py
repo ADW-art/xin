@@ -12,29 +12,9 @@ Usage (in path_agent.py):
         ...  # 走原 _teaching_init 流程
 """
 import logging
-import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
-
-
-# 教学"继续/下一个"显式信号 (与 supervisor._is_teaching_continue 对齐)
-_TEACHING_CONTINUE_PATTERNS = [
-    r'^(好|好的|可以|行|来|开始|没问题|嗯|OK|ok|yes|是|对|继续|下一个|下一节|接着|继续学|接着学|往下|往下学|学下一个|go on|next|continue|sure|yep|yeah|当然|必须的|搞起|来吧|开始吧|继续吧|OK吧)$',
-    r'(开始|讲解|讲一下|学一下|详细|进入|说说|讲).*第[一二三四五六七八九十\d]+',
-    r'第[一二三四五六七八九十\d]+\s*(天|节|课|章|节点|步)',
-]
-
-
-def _has_teaching_continue_signal(user_msg: str) -> bool:
-    """检测用户消息是否包含教学"继续"信号"""
-    if not user_msg:
-        return False
-    stripped = user_msg.strip()
-    for pattern in _TEACHING_CONTINUE_PATTERNS:
-        if re.search(pattern, stripped, re.IGNORECASE):
-            return True
-    return False
 
 
 def should_init_teaching(state: dict, context: dict) -> bool:
@@ -50,7 +30,7 @@ def should_init_teaching(state: dict, context: dict) -> bool:
     Logic:
         必须满足以下**任一**条件:
           1. teaching_context 已存在 (mode == "teaching")
-          2. 用户消息包含教学"继续"信号 ("好的", "继续", "下一个", "第X天")
+          2. 用户消息包含教学"继续"信号 (复用 shared_utils.is_teaching_continue)
           3. context 中显式标记 _explicit_teach=True (supervisor 显式授权)
 
         否则: 跳过教学启动, 走正常路径规划
@@ -62,16 +42,17 @@ def should_init_teaching(state: dict, context: dict) -> bool:
         logger.debug("P0-B gate: 教学上下文已存在, 允许启动")
         return True
 
-    # 条件 2: 用户显式继续信号
+    # 条件 2: 用户显式继续信号 (P1-FIX: 复用 shared_utils.is_teaching_continue, 删除重复检测)
     try:
-        from app.agents._msg_compat import last_msg_content
-        user_msg = last_msg_content(state.get("messages", []))
-        if _has_teaching_continue_signal(user_msg):
-            logger.info("P0-B gate: 用户消息含教学继续信号, 允许启动 (msg='%s')",
-                       user_msg[:50] if user_msg else "")
+        from app.core.shared_utils import is_teaching_continue
+        if is_teaching_continue(
+            _get_user_msg(state),
+            tc if tc.get("mode") == "teaching" else None
+        ):
+            logger.info("P0-B gate: 用户消息含教学继续信号, 允许启动")
             return True
     except Exception as e:
-        logger.debug("P0-B gate: 提取 user_msg 失败 (%s), 降级判断", e)
+        logger.debug("P0-B gate: is_teaching_continue 失败 (%s), 降级判断", e)
 
     # 条件 3: supervisor 显式授权
     if context.get("_explicit_teach"):
@@ -81,3 +62,9 @@ def should_init_teaching(state: dict, context: dict) -> bool:
     # 默认: 拒绝启动, 走路径规划
     logger.info("P0-B gate: 拒绝启动 _teaching_init (无显式信号, 避免越权教学)")
     return False
+
+
+def _get_user_msg(state: dict) -> str:
+    """从 state 中提取最后一条用户消息"""
+    from app.agents._msg_compat import last_msg_content
+    return last_msg_content(state.get("messages", []))

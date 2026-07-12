@@ -298,9 +298,24 @@ def _load_single_domain_kg(kg, filename: str) -> int:
             if name and name not in kg.nodes:
                 kg.nodes.add(name)
                 kg.in_degree.setdefault(name, 0)
+        # Build id→name mapping so edges (which use ids) can be translated
+        id_to_name: dict[str, str] = {}
+        for node in data.get("nodes", []):
+            nid = node.get("id", "")
+            name = node.get("name", "")
+            if nid and name:
+                id_to_name[nid] = name
         for edge in data.get("edges", []):
-            src, tgt = edge.get("source", ""), edge.get("target", "")
-            if src and tgt and src in kg.nodes and tgt in kg.nodes:
+            src_id, tgt_id = edge.get("source", ""), edge.get("target", "")
+            src = id_to_name.get(src_id, src_id)
+            tgt = id_to_name.get(tgt_id, tgt_id)
+            if src and tgt:
+                if src not in kg.nodes:
+                    kg.nodes.add(src)
+                    kg.in_degree.setdefault(src, 0)
+                if tgt not in kg.nodes:
+                    kg.nodes.add(tgt)
+                    kg.in_degree.setdefault(tgt, 0)
                 kg.edges.setdefault(src, set()).add(tgt)
                 kg.in_degree[tgt] = kg.in_degree.get(tgt, 0) + 1
         return len(data.get("nodes", []))
@@ -346,9 +361,24 @@ def _load_multidiscipline_kg(kg, topic: str = "") -> int:
                     kg.nodes.add(name)
                     kg.in_degree.setdefault(name, 0)
                     total_nodes += 1
+            # Build id→name mapping for edge translation
+            id_to_name: dict[str, str] = {}
+            for node in data.get("nodes", []):
+                nid = node.get("id", "")
+                name = node.get("name", "")
+                if nid and name:
+                    id_to_name[nid] = name
             for edge in data.get("edges", []):
-                src, tgt = edge.get("source", ""), edge.get("target", "")
-                if src and tgt and src in kg.nodes and tgt in kg.nodes:
+                src_id, tgt_id = edge.get("source", ""), edge.get("target", "")
+                src = id_to_name.get(src_id, src_id)
+                tgt = id_to_name.get(tgt_id, tgt_id)
+                if src and tgt:
+                    if src not in kg.nodes:
+                        kg.nodes.add(src)
+                        kg.in_degree.setdefault(src, 0)
+                    if tgt not in kg.nodes:
+                        kg.nodes.add(tgt)
+                        kg.in_degree.setdefault(tgt, 0)
                     kg.edges.setdefault(src, set()).add(tgt)
                     kg.in_degree[tgt] = kg.in_degree.get(tgt, 0) + 1
         except Exception:
@@ -429,53 +459,87 @@ def _compute_review_schedule(stages: list[dict]) -> list[dict]:
 
 
 def _validate_path_output(llm_output: str, known_concepts: list[str], stages: list[dict]) -> tuple[bool, list[str], str]:
-    """校验 LLM 生成的路径输出是否编造了不存在的知识点
+    """校验 LLM 生成的路径输出质量
+
+    检测三类问题:
+    1. 扁平天列表 (>15条"第X天"格式)
+    2. 重复模板 (>=5条近乎相同的行)
+    3. 编造知识点 (不在已知概念列表中)
 
     Returns:
-        (is_valid, foreign_concepts, cleaned_output_or_error)
-        is_valid=False 表示检测到编造内容
+        (is_valid, reasons_or_foreign, cleaned_output_or_error)
+        is_valid=False 表示检测到问题
     """
-    if not llm_output or not known_concepts:
+    if not llm_output:
+        return True, [], llm_output
+
+    import re as _vre
+
+    # ── 检测1: 扁平天列表 ──
+    day_matches = _vre.findall(r'第\d+天', llm_output)
+    if len(day_matches) > 15:
+        return False, ["flat_day_list"], llm_output
+
+    # ── 检测2: 重复模板 ──
+    lines = [l.strip() for l in llm_output.split('\n') if len(l.strip()) > 15]
+    if len(lines) >= 10:
+        normalized_counts: dict[str, int] = {}
+        for line in lines:
+            norm = _vre.sub(r'\d+', 'N', line)
+            normalized_counts[norm] = normalized_counts.get(norm, 0) + 1
+        repeated = sum(1 for c in normalized_counts.values() if c >= 5)
+        if repeated > 0:
+            return False, [f"repetitive_template ({repeated} groups)"], llm_output
+
+    # ── 检测3: 编造知识点 ──
+    if not known_concepts:
         return True, [], llm_output
 
     known_set = {c.lower().strip() for c in known_concepts}
-    # 从 LLM 输出中提取可能的"知识点"引用: 中文引号、加粗、列表项中的技术术语
-    import re as _vre
-    candidates = set()
-    # 匹配 **粗体** 或 「」中的文本
+    candidates: set[str] = set()
+    # 匹配 **粗体** 或 「」或 `代码` 中的文本
     for m in _vre.finditer(r'\*\*(.+?)\*\*|「(.+?)」|`(.+?)`', llm_output):
         candidates.add((m.group(1) or m.group(2) or m.group(3)).strip())
-    # 匹配 - 或数字. 开头的列表项中的核心术语
-    for m in _vre.finditer(r'(?:^|\n)\s*[-•\d]\.?\s*\*?\*?(.+?)\*?\*?(?:\s*[:：\-—])', llm_output, _vre.MULTILINE):
-        term = m.group(1).strip()
-        if len(term) <= 30:
-            candidates.add(term)
+    # 匹配列表项中的核心术语（排除表格行: | ... |）
+    for line in llm_output.split('\n'):
+        stripped = line.strip()
+        if stripped.startswith('|'):
+            continue
+        for m in _vre.finditer(
+            r'(?:^|\n)\s*[-•\d]\.?\s*\*?\*?(.+?)\*?\*?(?:\s*[:：\-—])',
+            line, _vre.MULTILINE,
+        ):
+            term = m.group(1).strip()
+            if 2 <= len(term) <= 30:
+                candidates.add(term)
 
-    foreign = []
+    _stage_pat = _vre.compile(r'^阶段\d+$')
+    common_words = {"学习", "阶段", "基础", "进阶", "高级", "核心", "知识点", "概念",
+                    "掌握", "理解", "了解", "复习", "实践", "项目", "练习", "小时",
+                    "目标", "内容", "计划", "路径", "时间", "安排", "建议"}
+
+    foreign: list[str] = []
     for cand in candidates:
         cand_lower = cand.lower().strip()
         if len(cand_lower) < 2:
             continue
-        # 检查是否在已知概念列表中
-        if cand_lower not in known_set:
-            # 模糊匹配: 检查是否有已知概念包含此候选或此候选包含已知概念
-            matched = False
-            for kc in known_set:
-                if len(kc) >= 3 and (kc in cand_lower or cand_lower in kc):
-                    matched = True
-                    break
-            if not matched:
-                # 过滤常见中文描述词（非知识点）
-                common_words = {"学习", "阶段", "基础", "进阶", "高级", "核心", "知识点", "概念",
-                                "掌握", "理解", "了解", "复习", "实践", "项目", "练习", "小时",
-                                "目标", "内容", "计划", "路径", "时间", "安排", "建议"}
-                if cand_lower not in common_words:
-                    foreign.append(cand)
+        if _stage_pat.match(cand_lower):
+            continue
+        if cand_lower in known_set:
+            continue
+        # 模糊匹配: 已知概念与候选互为子串 (要求 >=3 字符避免误匹配)
+        matched = any(
+            (len(kc) >= 3 and (kc in cand_lower or cand_lower in kc)) or
+            (len(cand_lower) >= 3 and len(kc) >= 3 and
+             _vre.search(_vre.escape(kc[:4]), cand_lower))
+            for kc in known_set
+        )
+        if not matched and cand_lower not in common_words:
+            foreign.append(cand)
 
     if foreign:
         logger.warning("PathAgent: _validate_path_output 检测到 %d 个编造知识点: %s",
                        len(foreign), foreign[:10])
-        # 尝试清理: 从输出中移除编造术语（保守策略：只在明显位置替换）
         cleaned = llm_output
         for f_term in foreign[:5]:
             cleaned = cleaned.replace(f"**{f_term}**", f"(参考: {f_term})")
@@ -999,6 +1063,13 @@ def path_agent_node(state: AgentState, spark: SparkClient) -> dict:
                 lines.append(f"### 阶段 {p['phase']}：{'、'.join(p['topics'][:5])}")
                 lines.append(f"- 知识点数：{len(p['topics'])} | 预计 {p['estimated_hours']} 小时 | 约 {p['estimated_weeks']} 周")
 
+            # 计算总工时/总周数（代码精确计算，LLM 不可编造）
+            total_hours = sum(p['estimated_hours'] for p in time_plan)
+            total_weeks = round(total_hours / max(weekly, 1))
+            lines.append("")
+            lines.append(f"## 时间汇总(已计算,直接使用)")
+            lines.append(f"- 总工时: {total_hours}h | 每周{weekly}h | 约{total_weeks}周")
+
             # 艾宾浩斯复习节点（在知识图谱路径中插入）
             scheduler = get_scheduler(state.get("user_id", 0))
             due_reviews = scheduler.get_review_nodes()
@@ -1120,25 +1191,30 @@ def path_agent_node(state: AgentState, spark: SparkClient) -> dict:
     last_user_msg = last_msg_content(state.get("messages", []), default=topic)
 
     if kg_path_text:
-        # 使用 DAG 动态规划数据作为 prompt 主数据（包含阶段+复习），
-        # 避免 kg_path_text 与 dag_path_enrichment 两套阶段信息冲突
+        # APPEND: KG topology + DAG enrichment (stable pattern)
+        full_kg_text = kg_path_text
         if dag_path_enrichment:
-            full_kg_text = dag_path_enrichment
-        else:
-            full_kg_text = kg_path_text
+            full_kg_text += "\n" + dag_path_enrichment
 
         kg_polish_system = (
-            "你是一个学习路径规划专家。以下是由知识图谱和 BKT 算法"
-            "生成的学习路径。请你润色为一份清晰易懂的学习计划。\n\n"
-            "【铁律 — 违反将导致输出被丢弃】\n"
-            "1. 知识点名称必须与下方完全一致，禁止翻译/改写/合并/拆分/添加\n"
-            "2. 阶段数量、阶段名称、每个阶段的知识点列表不可改变\n"
-            "3. 禁止引入下方未列出的任何概念、术语、技术名词\n"
-            "4. 禁止发明'Web开发''数据分析''深度学习'等不在下方阶段列表中的阶段名\n"
-            "5. 禁止将内部算法信息（如算法名、DAG动态规划等）输出给用户\n"
-            "6. 禁止使用套话模板（如'通过实际案例来学习'、'练习解决实际问题'），每阶段必须给出该阶段特有的学习目标\n"
-            "7. 输出前逐项核对：每个知识点名称是否与原文一字不差\n\n"
-            + full_kg_text
+            "你是一个学习路径规划专家。以下是由知识图谱拓扑排序和 BKT "
+            "动态路径规划算法联合生成的学习路径数据。请基于这些数据生成一份结构化的学习计划。\n\n"
+            "## 输出格式\n\n"
+            "### 1. 当前水平诊断\n"
+            "一句话概括当前水平。\n\n"
+            "### 2. 分阶段学习路线\n"
+            "用 Markdown 表格呈现，每行一个阶段:\n"
+            "| 阶段 | 主题 | 核心知识点 | 建议时长 | 前置依赖 | 检验标准 |\n"
+            "|------|------|-----------|----------|---------|--------|\n"
+            "| 1 | XXX | A, B, C | Xh | 无 | 实现XX |\n\n"
+            "下方数据中每个'阶段N'对应表格一行。知识点少的相邻阶段可合并。\n\n"
+            "### 3. 时间估算\n"
+            "直接使用下方'时间汇总'中的总工时和总周数,禁止自己计算。\n\n"
+            "### 4. 复习节点\n"
+            "关键阶段的复习时间点。\n\n"
+            "### 5. 里程碑与检验\n"
+            "每阶段可量化的检验标准。\n\n"
+            "规则: 禁止寒暄、禁止emoji、知识点名称与下方一致、语言精炼。\n\n" + full_kg_text
         )
 
         # 携带对话历史，帮助 LLM 理解用户上下文
@@ -1202,19 +1278,16 @@ def path_agent_node(state: AgentState, spark: SparkClient) -> dict:
                 full_kg_text = validation_msg
 
             kg_polish_system = (
-                "你是一个学习路径规划专家。以下是由知识图谱拓扑排序算法自动生成的学习路径。"
-                "请润色为清晰的学习计划——保持阶段顺序、知识点名称和数量不变, "
-                "用热情专业的语气逐阶段说明学习内容和目标。\n\n"
-                "【铁律 — 违反将导致输出被丢弃】\n"
-                "1. 知识点名称必须与下方完全一致，禁止翻译/改写/合并/拆分/添加\n"
-                "2. 阶段数量、每个阶段的知识点列表不可改变\n"
-                "3. 禁止引入下方未列出的任何概念、术语、技术名词\n"
-                "4. 只做语言润色：加说明、加目标、加复习提示\n"
-                "5. 输出前逐项核对：每个知识点名称是否与原文一字不差\n"
-                f"6. 禁止使用'第X周/第X天'扁平列表格式 — 保留原DAG阶段结构({len(dag_stages)}个阶段)\n"
-                "7. 每个阶段必须标注前置依赖关系（如'前置: XXX'），体现学习路径的拓扑顺序\n"
-                "8. 输出格式：每个阶段独立一节，包含\"前置\" → \"知识点\" → \"目标\" → \"检验\"四个部分\n\n" + full_kg_text
+                "你是一个学习路径规划专家。以下是由知识图谱拓扑排序算法自动生成的学习路径数据。"
+                "请基于这些数据生成一份结构化的学习计划。\n\n"
+                "输出要求: 5部分(诊断/路线表格/时间/复习/里程碑),最多8阶段,表格呈现,禁止寒暄和emoji。\n\n"
+                "禁止: 增加/删除/重命名知识点, 改变阶段顺序, 编造数字。\n\n" + full_kg_text
             )
+            # 画像引导注入
+            from app.core.shared_utils import _build_profile_guide
+            profile_guide = _build_profile_guide(profile)
+            if profile_guide:
+                kg_polish_system += profile_guide
 
             from app.core.shared_utils import _build_llm_messages
             messages = _build_llm_messages(
@@ -1281,7 +1354,7 @@ def path_agent_node(state: AgentState, spark: SparkClient) -> dict:
         # 非教学模式(无 init_teaching)的独立学习计划限制 1024 tokens
         # 防止 LLM 填充编造避免 54 天计划 + PGDCP 幻觉循环
         _is_teaching = context.get("init_teaching") or context.get("teaching_continue")
-        _plan_max_tokens = 4096 if _is_teaching else 1024
+        _plan_max_tokens = 4096
         path_output["stream_pending"] = {
             "messages": messages,
             "temperature": 0.5,
@@ -1295,10 +1368,11 @@ def path_agent_node(state: AgentState, spark: SparkClient) -> dict:
         # 构建路径内知识点之间的边数据（用于 ECharts / vue-flow 力导向图）
         dag_edges: list[dict] = []
         if kg is not None and hasattr(kg, "edges"):
+            _concepts_set = set(all_path_concepts)  # P2-FIX: set 查找 O(1) vs list O(n)
             for src, tgts in kg.edges.items():
-                if src in all_path_concepts:
+                if src in _concepts_set:
                     for tgt in tgts:
-                        if tgt in all_path_concepts:
+                        if tgt in _concepts_set:
                             dag_edges.append({"source": src, "target": tgt})
 
         path_output["dag"] = {

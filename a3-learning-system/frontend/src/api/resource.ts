@@ -18,7 +18,7 @@ import api from './index'
 // 单个资源的数据结构（与后端 ResourceListResponse 对齐）
 export interface ResourceItem {
   id: number
-  resource_type: 'document' | 'mindmap' | 'question_set' | 'video_script' | 'code_example'
+  resource_type: 'document' | 'mindmap' | 'question_set' | 'video_script' | 'code_example' | 'notebook' | 'audio_lecture' | 'video_animation'
   title: string
   knowledge_points: string[] | null        // 关联知识点
   difficulty_level: number | null          // 1-5 难度等级

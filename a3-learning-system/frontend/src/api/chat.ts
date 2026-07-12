@@ -15,6 +15,25 @@ SSE 流式对话 API
 */
 import api from './index'
 
+export interface ChatHistoryItem {
+  id: number
+  role: string
+  content: string
+  agent_type: string
+  created_at: string
+}
+
+export function getChatHistory(params?: { limit?: number }) {
+  return api.get<ChatHistoryItem[]>('/chat/history', { params })
+}
+
+export function deleteChatHistory(id?: number) {
+  if (id) {
+    return api.delete(`/chat/history/${id}`)
+  }
+  return api.delete('/chat/history')
+}
+
 // SSE 推送的数据块类型——与后端 sender.py 约定的格式一致
 export interface SSEChunk {
   type?: string        // 数据类型："text" | "resource" | "agent_switch" | "progress"
@@ -80,11 +99,13 @@ export function sendMessageStream(
   onDone: () => void,
   onError: (err: Error) => void,
   images?: SendImage[],   // 多模态：可选图片列表
+  regenerate?: boolean,   // U-03: 重新生成标记
 ): AbortController {
   const controller = new AbortController()
 
   // 构建请求体：支持纯文本 / 文本+图片 多模态
   const body: Record<string, any> = { content: message }
+  if (regenerate) body.regenerate = true
   if (images && images.length > 0) {
     body.images = images.map(img => ({
       base64: img.base64,
@@ -108,6 +129,7 @@ export function sendMessageStream(
       const decoder = new TextDecoder()
       let buffer = ''
       let currentEvent = ''
+      let hasDone = false  // P0-FIX: 防止 done 重复触发
 
       while (true) {
         const { done, value } = await reader.read()
@@ -122,18 +144,27 @@ export function sendMessageStream(
           if (!trimmed) continue  // 跳过空行
 
           if (trimmed.startsWith('event: ')) {
-            currentEvent = trimmed.slice(7).trim()
+            let rawEvent = trimmed.slice(7).trim()
+            // 兼容 v1. 版本前缀: event: v1.message → message
+            if (rawEvent.startsWith('v1.')) {
+              rawEvent = rawEvent.slice(3)
+            }
+            currentEvent = rawEvent
           } else if (trimmed.startsWith('data: ')) {
             try {
               const data = JSON.parse(trimmed.slice(6))
 
+              // P0-FIX (2026-07-12): done/error 标记状态但不 return,
+              // 因为后端在 done 之后还发 resource_ready/suggestion/review_due 事件
+              // 过早 return 会丢弃这些尾部事件
               if (currentEvent === 'done') {
+                hasDone = true
                 onDone()
-                return
+                continue  // 不 return，继续读取尾部事件
               }
               if (currentEvent === 'error') {
                 onError(new Error(data.message || data.detail || '未知错误'))
-                return
+                continue  // 不 return，继续读取可能的清理事件
               }
               // 显式标注事件类型，方便前端区分处理
               data.type = currentEvent
@@ -147,8 +178,24 @@ export function sendMessageStream(
           }
         }
       }
-      // 流正常结束（reader done），触发 onDone
-      onDone()
+      // P0-FIX (2026-07-12): flush buffer 残留的最后一段
+      // 流在事件中间被关闭时，buffer 中可能还有最后一段不完整数据
+      if (buffer.trim()) {
+        const trimmed = buffer.trim()
+        if (trimmed.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(trimmed.slice(6))
+            data.type = currentEvent
+            if (data.content === undefined || data.content !== '') {
+              onChunk(data)
+            }
+          } catch { /* 最后一段不完整，忽略 */ }
+        }
+      }
+      // 流正常结束，如果 done 事件还没触发则补触一次
+      if (!hasDone) {
+        onDone()
+      }
     })
     .catch((err: Error) => {
       // AbortError 是用户主动取消，不算错误

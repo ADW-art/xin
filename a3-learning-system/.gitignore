@@ -54,3 +54,83 @@ _c_*.html
 _cnsb.html
 _page_*.html
 _saiti_list.html
+
+# ===================================================================
+# A3 Learning System — 补充规则 (保证 clone 后能直接跑通)
+# ===================================================================
+
+# ---- 模型 / 嵌入向量文件 ----
+*.f32
+*.bin
+_emb*.f32
+_fx.py
+_rebuild_source.jsonl
+
+# ---- LangGraph checkpoint (含用户对话数据, 不能入库) ----
+backend/data/checkpoints.db
+backend/data/checkpoints.db-shm
+backend/data/checkpoints.db-wal
+
+# ---- ChromaDB 测试数据 ----
+backend/chroma_data_test/
+
+# ---- OCR / 教材 ingest 中间产物 ----
+backend/batch_*.txt
+backend/brute_done.txt
+backend/ocr_*.txt
+backend/ocr_*.json
+backend/ocr_phase_progress.json
+backend/full_ingest_progress.json
+backend/unified_ingest_progress.json
+backend/_batch*_done.json
+backend/_all_remaining_done.json
+backend/_ocr_step*_done.json
+backend/materials_ocr_done.json
+backend/pdf_ingest_done.txt
+backend/remaining_text_done.json
+backend/scan_result.json
+
+# ---- 教材原始 PDF (保留 _parsed/*.txt 解析结果, PDF 用 ingest 脚本重建) ----
+backend/app/scripts/knowledge_materials/*.pdf
+backend/app/scripts/knowledge_materials/*.PDF
+
+# ---- 测试产物 ----
+backend/test_tts.mp3
+backend/.coverage
+backend/coverage/
+backend/.pytest_cache/
+
+# ---- backend 根目录临时诊断脚本 ----
+backend/diag_*.py
+
+# ---- backend/scripts/ 一次性测试/诊断脚本 ----
+# 保留: health_check.ps1 / start_uvicorn_safe.ps1 / stop_uvicorn_safe.ps1 / test_sse_chat.ps1 / clean_checkpoint_stale_flags.py
+backend/scripts/debug_*.py
+backend/scripts/diag_*.py
+backend/scripts/test_*.py
+backend/scripts/test_*.js
+backend/scripts/repro_*.py
+backend/scripts/diff_diagnose.py
+backend/scripts/deploy_verify.py
+backend/scripts/verify_fix_loaded.py
+backend/scripts/utility_validation*.py
+backend/scripts/acceptance_test_v2.py
+backend/scripts/master_*.py
+backend/scripts/inspect_checkpoint.py
+backend/scripts/web_helper.py
+backend/scripts/github_api.py
+backend/scripts/.uvicorn_*.pid
+backend/scripts/logs/
+
+# ---- 后端运行时日志 ----
+backend/logs/
+
+# ---- 项目根目录散落的临时文件 ----
+/test_spark.py
+/X1_ws.py
+/frontend_diff.txt
+/完整修改清单.md
+/代码深度分析报告.md
+/visual-diagram-e2e-success.png
+/test_multi_round_report.json
+/uvicorn_*.err

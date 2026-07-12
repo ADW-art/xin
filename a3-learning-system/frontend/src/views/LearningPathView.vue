@@ -286,7 +286,8 @@ const nodeResourcesLoading = ref(false)
 function typeLabel(t: string): string {
   const m: Record<string, string> = {
     document: '文档', mindmap: '导图', question_set: '题目',
-    code_example: '代码', video_script: '脚本',
+    code_example: '代码', video_script: '脚本', reading_material: '阅读',
+    diagram: '图解', smart_tutoring: '智能辅导',
   }
   return m[t] || t
 }
@@ -909,6 +910,9 @@ onBeforeUnmount(() => {
 .res-chip-type.question_set { background: #FEF3C7; color: #92400E; }
 .res-chip-type.code_example { background: #D1FAE5; color: #065F46; }
 .res-chip-type.video_script { background: #FCE7F3; color: #9D174D; }
+.res-chip-type.reading_material { background: #CFFAFE; color: #155E75; }
+.res-chip-type.diagram { background: #EDE9FE; color: #7C3AED; }
+.res-chip-type.smart_tutoring { background: #DBEAFE; color: #1D4ED8; }
 .res-chip-title {
   flex: 1;
   font-size: 12px;

@@ -250,12 +250,10 @@ def test_collaborative_qa_routing() -> None:
     assert result[1].node == "evaluation_agent"
 
 def test_collaborative_resource_routing() -> None:
-    """collaborative_resource routes to Send resource+quality"""
+    """collaborative_resource 已改为串行 QC (P0-#3 2026-07-11)，不再 fork"""
     result = supervisor_router({"next_agent": "collaborative_resource"})
-    assert isinstance(result, list)
-    assert len(result) == 2
-    assert result[0].node == "resource_agent"
-    assert result[1].node == "quality_reviewer"
+    assert isinstance(result, str)
+    assert result == "collaborative_resource"
 
 def test_collaborative_path_routing() -> None:
     """collaborative_path routes to Send path+prefetch"""

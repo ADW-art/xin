@@ -4,6 +4,7 @@
 提供教材上传、知识库管理、版本控制功能
 """
 import json
+import logging
 import os
 import uuid
 from datetime import datetime
@@ -17,6 +18,8 @@ from app.models.user import User
 from app.api.auth import get_current_user
 from app.services.document_parser import parse_uploaded_pdf, parse_markdown, parse_docx, parse_file
 from app.services.rag_service import ingest_document, get_knowledge_count
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/admin", tags=["管理"])
 
@@ -93,12 +96,23 @@ async def upload_document(
 def get_stats(current_user: User = Depends(get_current_user)):
     """知识库统计信息"""
     from app.core.chroma_client import get_collection
-    stats = {"knowledge_base": get_knowledge_count()}
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+    stats = {"knowledge_base": 0, "exercise_bank": 0}
     try:
-        ex_col = get_collection("exercise_bank")
-        r = ex_col.get()
-        stats["exercise_bank"] = len(r["ids"]) if r and r.get("ids") else 0
-    except Exception:
+        stats["knowledge_base"] = get_knowledge_count()
+    except Exception as e:
+        logger.warning("Knowledge base stats failed: %s", e)
+    try:
+        # ChromaDB PersistentClient 在 sqlite3 文件过大时可能阻塞
+        # 用线程超时保护，避免阻塞 Dashboard 加载
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(
+                lambda: get_collection("exercise_bank").count()
+                if get_collection("exercise_bank") else 0
+            )
+            stats["exercise_bank"] = fut.result(timeout=5)
+    except (FutureTimeoutError, Exception) as e:
+        logger.warning("Exercise bank stats failed: %s", e)
         stats["exercise_bank"] = 0
     return stats
 

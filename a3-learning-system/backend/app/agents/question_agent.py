@@ -35,7 +35,8 @@ _cache_lock = threading.Lock()
 import time as _time
 
 _last_questions_cache: dict[int, tuple[str, float]] = {}  # {user_id: (text, timestamp)}
-_CACHE_TTL_SECONDS = 86400  # 24小时过期（避免正常学习间隔导致答题上下文丢失）
+from app.config import AGENT_QUESTION_CACHE_TTL as _CACHE_TTL_SECONDS
+from app.services.sse_bridge import StreamRequest, stream_request_to_dict
 _MAX_CACHE_SIZE = 128
 
 def _evict_expired() -> None:
@@ -60,13 +61,14 @@ def cache_questions_text(user_id: int, text: str) -> None:
                      user_id, len(text), len(_last_questions_cache))
 
 def _get_cached_questions(user_id: int) -> str:
-    """获取缓存的题目文本；TTL过期或缓存未命中返回空字符串"""
-    entry = _last_questions_cache.get(user_id)
-    if entry:
-        text, ts = entry
-        if _time.time() - ts < _CACHE_TTL_SECONDS:
-            return text
-        del _last_questions_cache[user_id]
+    """获取缓存的题目文本；TTL过期或缓存未命中返回空字符串（线程安全）"""
+    with _cache_lock:
+        entry = _last_questions_cache.get(user_id)
+        if entry:
+            text, ts = entry
+            if _time.time() - ts < _CACHE_TTL_SECONDS:
+                return text
+            del _last_questions_cache[user_id]
     return ""
 
 # ============================================================
@@ -78,8 +80,10 @@ ANSWER_PATTERNS = [
     r'^[1-9][\s]*(?:正确|错误|对|错)', # "1对" "1 错误"
     r'^(?:答案是?|答案)[:\s]',         # "答案是: ..." "答案：..."
     r'^(?:选|填|我的答案)',              # "选A" "填xxx" — but NOT "写" (too common: "写代码")
-    # Fixed: only match single A-D letter at start of line or after numbering (not the English article "a")
-    r'^[A-Da-d](?:$|[\s,，/]+)',       # Single letter answer at start of text
+    # 仅匹配明确的答案格式: 编号+字母 或 独立单字母答案
+    # 不匹配英语冠词 "a"/"A" 后跟字母 ("Abc" 不匹配, 但 "A " 后跟空格仍需上下文判断)
+    # (?-i:[A-D]) 只匹配大写，防止 "a good idea" 等英文冠词被误判为答案
+    r'^(?:[1-9][\s]*[A-Da-d]|(?-i:[A-D]))(?:$|[\s,，/、.])',
     r'(?<=\d)[A-Da-d](?:$|[\s,，/]+)', # Letter answer after a number e.g. "1A"
     r'def\s+\w+\s*\(.*\):',            # Python代码答案 (only at start of line or after newline)
     r'^\[[\w\s,]+\]$',                 # 列表/集合答案 (must be the entire message)
@@ -92,9 +96,14 @@ def is_answer_submission(text: str) -> bool:
     text = text.strip()
     if len(text) < 1 or len(text) > 500:
         return False
-    # 太长的自然语言不像答案
+    # 太长的自然语言不像答案；短消息中的单字母大写不在此过滤
     if len(text) > 100 and not re.search(r'[A-Da-d]', text):
         return False
+    # 单字母/短答案特殊处理: 只有极短消息(<=5字符)中的独立字母才视为答案
+    # 避免 "a good idea" 等英文冠词被误判
+    if len(text) <= 5:
+        if re.fullmatch(r'\s*[A-Da-d]\s*', text):
+            return True
     for pattern in ANSWER_PATTERNS:
         if re.search(pattern, text, re.IGNORECASE):
             return True
@@ -111,7 +120,7 @@ def extract_answer_map(text: str, num_questions: int = 3) -> dict:
     result = {}
 
     # 格式1: 显式题号 "1A 2B 3xxx" 或 "1:A 2:B"
-    explicit = re.findall(r'(\d+)\s*[:：]?\s*([A-Za-z0-9_\[\]\'\"\s]{1,100})', text)
+    explicit = re.findall(r'(\d+)\s*[:：]?\s*([A-Za-z0-9_\[\]\'\"\/+=*!@#$%^&~`\-]{1,100})', text)
     if explicit:
         for qnum, ans in explicit:
             try:
@@ -354,6 +363,7 @@ GRADE_PROMPT = """你是一个智能阅卷老师。请批改学生的答题结�
 
 def question_agent_node(state: AgentState, spark: SparkClient) -> dict:
     """Question Agent 主逻辑：出题 or 评阅 双模式"""
+    state = AgentState.model_validate(state)
     state = dict(state)  # TypedDict → dict
     profile = state.get("user_profile") or {}
     context = state.get("context", {})
@@ -378,9 +388,11 @@ def question_agent_node(state: AgentState, spark: SparkClient) -> dict:
             m_role = m.get("role", "") if isinstance(m, dict) else getattr(m, "role", "")
             m_content = safe_get_content(m)
             if m_role == 'assistant' and m_content and isinstance(m_content, str) and '题目' in m_content[:200]:
-                effective_questions_text = m_content
-                logger.info("QuestionAgent: 从会话历史恢复题目文本 (len=%d)", len(m_content))
-                break
+                # 验证确实是出题消息（包含编号题目格式，而非单纯提及"题目"二字）
+                if re.search(r'(?:\d+[\.\、\)）]\s*|第\d+题)', m_content[:500]):
+                    effective_questions_text = m_content
+                    logger.info("QuestionAgent: 从会话历史恢复题目文本 (len=%d)", len(m_content))
+                    break
 
     if is_answer_submission(last_msg) and effective_questions_text:
         # ════════════════════════════════════
@@ -412,11 +424,11 @@ def question_agent_node(state: AgentState, spark: SparkClient) -> dict:
                     "topic": last_topic,
                     "answers": answer_map,
                     "bkt_p_known": tracker.get_or_create(last_topic).p_known,
-                    "stream_pending": {
-                        "messages": messages,
-                        "temperature": 0.4,
-                        "max_tokens": 4096,
-                    },
+                    "stream_pending": stream_request_to_dict(StreamRequest(
+                        messages=messages,
+                        temperature=0.4,
+                        max_tokens=4096,
+                    )),
                 },
             },
         }
@@ -524,13 +536,13 @@ def question_agent_node(state: AgentState, spark: SparkClient) -> dict:
                     "question_count": question_count,
                     "last_questions_text": "",   # 由 chat.py 流式完成后缓存填充
                     "bkt_p_known": tracker.get_or_create(topic).p_known,
-                    "stream_pending": {
-                        "messages": messages,
-                        "temperature": 0.6,
-                        "max_tokens": 4096,
-                        "use_safe": True,    # 启用 LLM 重试保护
-                        "chunk_size": 2,     # 逐字打字机效果
-                    },
+                    "stream_pending": stream_request_to_dict(StreamRequest(
+                        messages=messages,
+                        temperature=0.6,
+                        max_tokens=4096,
+                        use_safe=True,
+                        chunk_size=12,
+                    )),
                 },
             },
         }

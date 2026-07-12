@@ -89,41 +89,37 @@ def _sync_bkt_to_profile(user_id: int, tracker):
     all_scores = tracker.get_all_scores()
     if not all_scores:
         return
-    from app.core.database import SessionLocal as _SL
+    from app.core.database import get_session
     from app.models.profile import LearningProfile
-    db = _SL()
     try:
-        row = db.query(LearningProfile).filter(LearningProfile.user_id == user_id).first()
-        if not row:
-            row = LearningProfile(user_id=user_id)
-            db.add(row)
-        kb = {}
-        for name, score in all_scores.items():
-            kb[name] = round(score * 100, 1)
-        if row.knowledge_base and isinstance(row.knowledge_base, dict):
-            for k, v in row.knowledge_base.items():
-                if k not in kb:
-                    kb[k] = v
-        row.knowledge_base = kb
-        avg = sum(all_scores.values()) / max(len(all_scores), 1)
-        mastered = sum(1 for v in all_scores.values() if v >= 0.85)
-        total = len(all_scores)
-        prev = row.dimension_scores or {}
-        row.dimension_scores = {
-            "knowledge": round(avg * 100, 1),
-            "speed": prev.get("speed", DIMENSION_DEFAULTS["speed"]),
-            "practice": round(mastered / max(total, 1) * 100, 1),
-            "focus": prev.get("focus", DIMENSION_DEFAULTS["focus"]),
-            "logic": prev.get("logic", DIMENSION_DEFAULTS["logic"]),
-            "trend": round(mastered / max(total, 1) * 100, 1),
-            "overall": round(avg * 100, 1),
-        }
-        db.commit()
+        with get_session() as db:
+            row = db.query(LearningProfile).filter(LearningProfile.user_id == user_id).first()
+            if not row:
+                row = LearningProfile(user_id=user_id)
+                db.add(row)
+            kb = {}
+            for name, score in all_scores.items():
+                kb[name] = round(score * 100, 1)
+            if row.knowledge_base and isinstance(row.knowledge_base, dict):
+                for k, v in row.knowledge_base.items():
+                    if k not in kb:
+                        kb[k] = v
+            row.knowledge_base = kb
+            avg = sum(all_scores.values()) / max(len(all_scores), 1)
+            mastered = sum(1 for v in all_scores.values() if v >= 0.85)
+            total = len(all_scores)
+            prev = row.dimension_scores or {}
+            row.dimension_scores = {
+                "knowledge": round(avg * 100, 1),
+                "speed": prev.get("speed", DIMENSION_DEFAULTS["speed"]),
+                "practice": round(mastered / max(total, 1) * 100, 1),
+                "focus": prev.get("focus", DIMENSION_DEFAULTS["focus"]),
+                "logic": prev.get("logic", DIMENSION_DEFAULTS["logic"]),
+                "trend": round(mastered / max(total, 1) * 100, 1),
+                "overall": round(avg * 100, 1),
+            }
     except Exception as e:
-        db.rollback()
         logger.warning("BKT→Profile 同步失败: %s", e)
-    finally:
-        db.close()
 
 
 # ══════════ 端点实现 ══════════
@@ -158,23 +154,19 @@ def submit_answer(
     invalidate_tracker(current_user.id)
 
     # 记录到 answer_records
-    from app.core.database import SessionLocal as _SL
-    db = _SL()
+    from app.core.database import get_session
     try:
-        record = AnswerRecord(
-            user_id=current_user.id,
-            concept=concept,
-            user_answer=body.user_answer,
-            is_correct=body.is_correct,
-            time_spent=body.time_spent,
-        )
-        db.add(record)
-        db.commit()
+        with get_session() as db:
+            record = AnswerRecord(
+                user_id=current_user.id,
+                concept=concept,
+                user_answer=body.user_answer,
+                is_correct=body.is_correct,
+                time_spent=body.time_spent,
+            )
+            db.add(record)
     except Exception as e:
-        db.rollback()
         logger.warning("答题记录写入失败: %s", e)
-    finally:
-        db.close()
 
     # v4: 构建 update_step 明细
     update_step = {
@@ -216,41 +208,36 @@ def submit_answers(
     results = []
 
     from app.services.bkt_service import normalize_concept_name as normalize
-    from app.core.database import SessionLocal as _SL
-    db = _SL()
+    from app.core.database import get_session
     try:
-        for ans in body.answers:
-            norm_concept = normalize(ans.concept)
-            concept = norm_concept if norm_concept and norm_concept != "未分类" else ans.concept
+        with get_session() as db:
+            for ans in body.answers:
+                norm_concept = normalize(ans.concept)
+                concept = norm_concept if norm_concept and norm_concept != "未分类" else ans.concept
 
-            step = tracker.record_answer(concept, ans.is_correct)
-            node = tracker.get_or_create(concept)
+                step = tracker.record_answer(concept, ans.is_correct)
+                node = tracker.get_or_create(concept)
 
-            record = AnswerRecord(
-                user_id=current_user.id,
-                concept=concept,
-                user_answer=ans.user_answer,
-                is_correct=ans.is_correct,
-                time_spent=ans.time_spent,
-            )
-            db.add(record)
+                record = AnswerRecord(
+                    user_id=current_user.id,
+                    concept=concept,
+                    user_answer=ans.user_answer,
+                    is_correct=ans.is_correct,
+                    time_spent=ans.time_spent,
+                )
+                db.add(record)
 
-            results.append({
-                "concept": ans.concept,
-                "concept_normalized": concept,
-                "p_known": round(node.p_known, 4),
-                "level": node.level,
-                "is_mastered": node.is_mastered,
-                "params_source": node.param_source.value,
-            })
-
-        db.commit()
+                results.append({
+                    "concept": ans.concept,
+                    "concept_normalized": concept,
+                    "p_known": round(node.p_known, 4),
+                    "level": node.level,
+                    "is_mastered": node.is_mastered,
+                    "params_source": node.param_source.value,
+                })
     except Exception as e:
-        db.rollback()
         logger.error("批量答题记录写入失败: %s", e)
         raise HTTPException(status_code=500, detail="批量写入失败")
-    finally:
-        db.close()
 
     tracker.persist_to_db()
     _sync_bkt_to_profile(current_user.id, tracker)
@@ -280,9 +267,8 @@ def get_bkt_status(
     if not tracker.nodes:
         try:
             from app.models.profile import LearningProfile
-            from app.core.database import SessionLocal as _SL
-            db = _SL()
-            try:
+            from app.core.database import get_session
+            with get_session() as db:
                 row = db.query(LearningProfile).filter(
                     LearningProfile.user_id == current_user.id
                 ).first()
@@ -293,8 +279,6 @@ def get_bkt_status(
                         "BKT状态: user=%d 从画像初始化 %d 个概念",
                         current_user.id, len(row.knowledge_base),
                     )
-            finally:
-                db.close()
         except Exception as e:
             logger.warning("BKT自动初始化失败: %s", e)
 

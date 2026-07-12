@@ -24,11 +24,10 @@ from app.agents.collaboration import _quality_review_node, qa_join_node, rc_join
 from app.agents._msg_compat import last_msg_content  # 兼容 checkpoint 恢复后 dict 格式
 from langgraph.types import Send
 from app.services.spark_client import SparkClient #向星火通信
+from app.utils.circuit_breaker import _llm_breaker, CircuitBreakerOpenError
 
 logger = logging.getLogger(__name__)
 
-# 如果设置为 True，使用 registry.py 的 AgentRegistry.build_graph() 替代手动构建
-# 默认 False 保持现有行为
 # 意图分类用到的 System Prompt
 SUPERVISOR_PROMPT = """【你是纯分类器，不是回答者】
 你的唯一任务是判断用户意图，返回一个 JSON 对象。
@@ -48,9 +47,6 @@ resource 意图详细触发词分类 (Detailed resource triggers)
 ────────────────────────────────
 
 【A类-概念学习 Concept Learning】
-    # reading_material intent - A3 extension reading requirement
-    if any(k in text for k in ["推荐阅读", "拓展阅读", "推荐资料", "拓展资料", "扩展阅读", "阅读材料", "推荐文章", "推荐书", "推荐书籍", "延伸阅读", "进一步阅读", "further reading", "reading list", "recommended reading"]):
-        return "{"intent": "resource", "params": {"resource_type": "reading_material", "topic": text[:200]}}"
 
 	触发词(CN): "讲讲""讲一下""讲解""教""教我""说说""介绍"
 	       "学XX""教我XX""解释XX""什么是XX""XX的概念""XX的原理"
@@ -218,12 +214,25 @@ def _is_broad_learning_request(text: str) -> bool:
         has_learning_verb = any(v in text_lower for v in ["学", "学一下", "教我", "learn", "teach", "study"])
         if not has_learning_verb:
             return False  # 单学科名无学习意图 → 不触发教学
-        subject_hints = [
-            "Python", "Java", "C++", "Go", "Rust", "JavaScript", "TypeScript",
-            "前端", "后端", "算法", "数据结构", "机器学习", "深度学习",
-            "数据库", "SQL", "网络", "操作系统", "Linux", "Docker",
-            "React", "Vue", "Spring", "Django", "Flask", "FastAPI",
-        ]
+        # L5: 从知识图谱动态加载学科列表，而非硬编码
+        try:
+            from app.services.knowledge_graph import get_graph
+            kg = get_graph()
+            if kg and kg.nodes:
+                # 从 KG 节点名提取学科关键词 (取前20个权重最高的)
+                subject_hints = sorted(kg.nodes, key=lambda n: -kg.keyword_weights.get(n, 0))[:20]
+            else:
+                subject_hints = []
+        except Exception:
+            subject_hints = []
+        if not subject_hints:
+            # 降级: KG 不可用时使用基础列表
+            subject_hints = [
+                "Python", "Java", "C++", "Go", "Rust", "JavaScript", "TypeScript",
+                "前端", "后端", "算法", "数据结构", "机器学习", "深度学习",
+                "数据库", "SQL", "网络", "操作系统", "Linux", "Docker",
+                "React", "Vue", "Spring", "Django", "Flask", "FastAPI",
+            ]
         for subj in subject_hints:
             if subj.lower() in text_lower:
                 return True
@@ -238,23 +247,31 @@ def _has_explicit_new_intent(text: str, text_lower: str) -> bool:
     教学流的 continue 不应该劫持它。
     """
     _new_intent_signals = [
-        # 学习规划意图 → 应路由 path_agent
+        # 学习规划意图
         "学习计划", "学习路线", "规划", "计划", "安排", "学习路径",
         "roadmap", "study plan", "learning path",
-        # 评估意图 → 应路由 evaluation_agent
+        # 评估意图
         "评估", "报告", "检测水平", "掌握情况",
         "评估一下", "evaluate", "assess", "progress",
-        # 出题意图 → 应路由 question_agent
+        # 出题意图
         "出题", "测试一下", "练习", "来几道", "quiz",
-        # 明确的主题学习请求（非"继续"类模糊确认）
+        # 明确的主题学习请求
         "帮我制定", "帮我规划", "帮我学", "教我",
         "我想学", "我要学", "讲一下", "讲讲", "解释一下",
         "说一下", "介绍下", "说说", "给我讲",
+        # P0-1 (2026-07-12): 扩展覆盖常见追问/推荐/下一步场景
+        "推荐", "建议", "接下来", "然后学", "继续学", "下一步",
+        "之后", "往后", "接着", "下面", "接下去", "往后学",
+        "再学", "学完", "然后呢", "之后呢", "接下来呢",
+        "换个", "换一个", "别的", "其他", "还有什么", "还有什么呢",
+        # P1 (2026-07-12): 覆盖中断/停止/不满意场景，防止用户被困在教学循环中
+        "不要", "别说了", "停下", "停止", "够了", "太多",
+        "不需要", "不用", "算了", "别发", "别重复",
+        "重新开始", "重来", "换个话题", "换话题", "不学了",
+        "知道了", "已经会了", "懂了", "明白了", "了解",
+        "结束", "退出", "返回", "取消", "切换",
     ]
     return any(kw in text_lower for kw in _new_intent_signals)
-
-
-    return True
 
 def _keyword_fallback(text: str) -> dict:
     """JSON 解析失败时的关键词兜底意图分类 (中英双语)"""
@@ -262,8 +279,9 @@ def _keyword_fallback(text: str) -> dict:
     # 优先级从高到低：具体意图 > 通用意图
 
     # ── Negation detection: 否定意图 → chat（例: "我不想做计划" 不应路由到 path）──
-    _negation_markers = ["不想", "不需要", "不要", "不用", "没想", "别给我", "别"]
-    _is_negated = any(text.startswith(n) or n in text[:10] for n in _negation_markers)
+    _negation_markers = ["不想", "不需要", "不要", "不用", "没想", "别给我", "别再",
+                         "别说了", "别问了", "别推荐", "别让我", "别搞"]
+    _is_negated = any(text.startswith(n) or n in text[:50] for n in _negation_markers)
     if _is_negated:
         return {"intent": "chat", "params": {}}  # 否定意图交给 chat_agent 处理
 
@@ -295,25 +313,41 @@ def _keyword_fallback(text: str) -> dict:
         return {"intent": "question", "params": {}}
 
     # ── path: 路线/计划/下一步 ──
+    # P0-实用 2026-07-11: 提到 profile 之前, 防止 "我学XX, 请给我一个学习路线/计划" 被误判为 profile
     if any(k in text for k in ["路线", "计划", "下一步", "学什么", "接下来", "学到哪",
                                 "roadmap", "learning path", "what next",
                                 "what should i learn", "study plan",
-                                "learning plan"]):
+                                "learning plan", "给我一个学习", "给我制定", "给我规划"]):
         return {"intent": "path", "params": {}}
 
     # ── profile: 自述背景/经验 ──
-    if any(k in text for k in ["我是初学者", "我零基础", "我没学过", "我是小白", "我是新手",
-                                "我有经验", "我之前", "我在做", "我从事", "我是做",
-                                "我工作了", "我工作过", "我做过", "我做了", "我学的", "我学的专业",
-                                "我专业是", "我目前在做", "我目前是", "我做过后端",
-                                "我做过程序员", "我是程序员", "我是工程师", "我是开发",
-                                "我是学生", "我是研究生", "我是大学生", "我在读",
-                                "i am a beginner", "i have experience",
-                                "i'm a student", "i am a student",
-                                "my background", "i work as", "i'm a",
-                                "我是一位", "我是一名", "我是做后端", "我是做前端",
-                                "我做后端", "我做前端", "我做全栈", "我做运维", "我做测试",
-                                "我是后端", "我是前端", "我是全栈", "我是运维", "我是测试"]):
+    # P0-实用 2026-07-11: 改用更严格的边界检测, 避免 "我学XX" 误判 (已移 path 检测到上面)
+    # 仅当消息主体是描述自己的背景, 不含具体学习请求时才判定为 profile
+    _profile_strong = any(k in text for k in [
+        "我是初学者", "我零基础", "我没学过", "我是小白", "我是新手",
+        "我有经验", "我之前", "我在做", "我从事", "我是做",
+        "我工作了", "我工作过", "我做过", "我做了",
+        "我专业是", "我目前在做", "我目前是", "我做过后端",
+        "我做过程序员", "我是程序员", "我是工程师", "我是开发",
+        "我是学生", "我是研究生", "我是大学生", "我在读",
+        "i am a beginner", "i have experience",
+        "i'm a student", "i am a student",
+        "my background", "i work as", "i'm a",
+        "我是一位", "我是一名", "我是做后端", "我是做前端",
+        "我做后端", "我做前端", "我做全栈", "我做运维", "我做测试",
+        "我是后端", "我是前端", "我是全栈", "我是运维", "我是测试",
+    ])
+    # 仅当以下两个条件之一满足时, 才判定为 profile:
+    # 1) 含强信号 (如 "我是XX" / "i am a" 等明确自我介绍)
+    # 2) 同时含 "我学" 背景 + 不含 path/resource/question/evaluation 关键词
+    _has_strong_signal = _profile_strong
+    _has_learning_request = any(k in text for k in [
+        "路线", "计划", "规划", "学习", "教我", "讲解", "讲讲", "讲一下",
+        "介绍", "解释", "什么是", "怎么用", "如何", "为什么",
+        "出题", "做题", "测试", "练习", "评估", "报告",
+        "roadmap", "learning path", "study plan", "explain", "teach",
+    ])
+    if _has_strong_signal or (not _has_learning_request and _profile_strong):
         return {"intent": "profile", "params": {}}
 
     # ── chat: 系统相关/自我介绍 (优先于resource，避免"介绍一下你"被误分类) ──
@@ -412,7 +446,7 @@ def _proactive_suggest(last_agent: str, last_output: dict) -> dict | None:
         if mode == "grade":
             p_known = last_output.get("bkt_p_known", 0.5)
             if p_known >= 0.7:
-                return {"intent": "resource", "params": {}, "reason": "掌握良好，推荐进阶知识"}
+                return {"intent": "path", "params": {}, "reason": "掌握良好，推荐推进学习路径"}
             else:
                 return {"intent": "resource", "params": {}, "reason": "薄弱点，推荐复习基础"}
 
@@ -423,9 +457,65 @@ def _proactive_suggest(last_agent: str, last_output: dict) -> dict | None:
 # supervisor_node 辅助函数 — A-01 职责拆分
 # ═══════════════════════════════════════════════════════════
 
+def _handle_profile_first_routing(state: dict, current_agent: str, tc: dict,
+                                   _new_traces: list) -> dict | None:
+    """画像采集完成后统一延迟意图路由 (合并两处 profile-first 检查)
+
+    参照 LangGraph Command(goto=) single-exit 模式:
+      - profile_first 标志或 deferred_intent 上下文均可触发
+      - 画像维度 >= 3 → 路由到原意图 (collaborative 节点)
+      - 画像不足 → 保持等待
+
+    Returns:
+        路由 dict 或 None (不处理时)
+    """
+    if current_agent != "profile_agent":
+        return None
+
+    ctx = state.get("context") or {}
+    # 延迟意图: profile_first (新) 或 deferred_intent (旧 v5.2)
+    deferred = ctx.get("deferred_intent")
+    if not deferred:
+        return None
+
+    filled_dims, _ = _get_profile_status(state.get("user_profile"))
+
+    if len(filled_dims) < 3:
+        logger.info("Supervisor: 画像不足(%d/6维)，保持 profile_first 待下一轮", len(filled_dims))
+        return {
+            "current_agent": "supervisor",
+            "next_agent": "END",
+            "context": {**ctx, "profile_first": True, "deferred_intent": deferred},
+            "stream_buffer": "",
+            "trace": _new_traces,
+        }
+
+    route_map = {
+        "resource": "collaborative_resource", "question": "collaborative_qa",
+        "path": "collaborative_path", "evaluation": "evaluation_agent",
+        "profile": "profile_agent",
+    }
+    next_agent = route_map.get(deferred, "collaborative_resource")
+    deferred_params = ctx.get("deferred_params", {})
+
+    logger.info("Supervisor: 画像采集完成(%d/6维) → 回到原意图 %s → %s",
+                len(filled_dims), deferred, next_agent)
+
+    return {
+        "current_agent": "supervisor",
+        "next_agent": next_agent,
+        "context": {**ctx, **ctx.get("deferred_context", {}),
+                    **(deferred_params or {}), "profile_first_done": True},
+        "teaching_context": {**tc, "profile_first_done": True},
+        "stream_buffer": "",
+        "trace": _new_traces,
+    }
+
+
 def _handle_agent_return(state: dict, agent_outputs: dict, current_agent: str,
                          last_msg: str, last_msg_lower: str,
-                         _entry_time: float, _new_traces: list) -> dict:
+                         _entry_time: float, _new_traces: list,
+                         profile: dict, spark) -> dict:
     """处理 Agent 完成后的重入/链式路由 (原 supervisor_node 优先级-1)
 
     职责:
@@ -461,9 +551,17 @@ def _handle_agent_return(state: dict, agent_outputs: dict, current_agent: str,
     if current_agent == "path_join":
         path_output = agent_outputs.get("path_agent", {})
         stage = path_output.get("teaching_stage", "")
+        # DEBUG-PATH-JOIN 2026-07-11: 详细诊断 path_join → supervisor 路由
+        logger.info("DEBUG-PATH-JOIN: current_agent=path_join, stage=%r, "
+                    "path_output_keys=%s, tc_mode=%s, ctx_replan=%s",
+                    stage,
+                    list(path_output.keys()) if path_output else [],
+                    state.get("teaching_context", {}).get("mode") if state.get("teaching_context") else None,
+                    state.get("context", {}).get("replan_path"))
         # P0-C 2026-07-11: 教学链 gate, 防止 checkpoint 残留 teaching_context 触发自动教学
         from app.agents._teaching_gate import should_init_teaching
         if not should_init_teaching(state, state.get("context", {})):
+            logger.info("DEBUG-PATH-JOIN: gate DENIED → END")
             logger.info("Supervisor: 教学 gate 拒绝 → path_join 正常结束, 不进入教学链")
             return {
                 "current_agent": "supervisor",
@@ -530,42 +628,9 @@ def _handle_agent_return(state: dict, agent_outputs: dict, current_agent: str,
             }
 
     # ── 画像优先流程: profile_agent 完成采集 → 回到原意图 ──
-    if current_agent == "profile_agent":
-        ctx = state.get("context", {})
-        if ctx.get("profile_first"):
-            filled_dims, _ = _get_profile_status(state.get("user_profile"))
-            if len(filled_dims) >= 3:
-                deferred = ctx.get("deferred_intent", "resource")
-                logger.info("Supervisor: 画像采集完成(%d/6维) → 回到原意图 %s", len(filled_dims), deferred)
-                route_map_agent = {
-                    "resource": "collaborative_resource", "question": "collaborative_qa",
-                    "path": "collaborative_path", "evaluation": "evaluation_agent",
-                }
-                return {
-                    "current_agent": "supervisor",
-                    "next_agent": route_map_agent.get(deferred, "resource_agent"),
-                    "context": {
-                        **ctx,
-                        **ctx.get("deferred_context", {}),
-                        "profile_first_done": True,
-                    },
-                    "teaching_context": {**tc, "profile_first_done": True},
-                    "stream_buffer": "",
-                    "trace": _new_traces,
-                }
-            else:
-                logger.info("Supervisor: 画像不足(%d/6维)，保持 profile_first 待下一轮", len(filled_dims))
-                return {
-                    "current_agent": "supervisor",
-                    "next_agent": "END",
-                    "context": {
-                        **ctx,
-                        "profile_first": True,
-                        "deferred_intent": ctx.get("deferred_intent", "resource"),
-                    },
-                    "stream_buffer": "",
-                    "trace": _new_traces,
-                }
+    _profile_route = _handle_profile_first_routing(state, current_agent, tc, _new_traces)
+    if _profile_route is not None:
+        return _profile_route
 
     # ── 质量审查门: quality_reviewer 低分 → 难度重定向 ──
     if current_agent == "rc_join":
@@ -593,40 +658,22 @@ def _handle_agent_return(state: dict, agent_outputs: dict, current_agent: str,
         # P3: 质量反馈传递 — 将审查建议注入 teaching_context，供后续 resource_agent 调用改进
         qc_issues = qc.get("issues", [])
         if qc_issues:
+            tc = dict(tc)  # H6: copy-on-write, 避免直接 mutation 原 state
             tc["_quality_hints"] = {
                 "issues": [i for i in qc_issues if not i.startswith("[")][:3],
                 "difficulty_target": qc.get("difficulty_target", ""),
             }
             logger.info("Supervisor: 质量反馈已注入 teaching_context (%d issues)", len(qc_issues))
 
-    # ── v5: 教学模式智能推进 ──
+    # ── 教学模式: 每节点完成后等待用户确认，不再自动推进 ──
+    # P0 (2026-07-12): 移除 auto_advance 循环，一条用户消息只生成一个节点内容
+    # 用户输入"继续"/"下一个"触发 is_teaching_continue → 路由到 path_agent._teaching_advance
     if current_agent == "rc_join" and tc.get("mode") == "teaching":
         current_idx = tc.get("current_index", 0)
         total = len(tc.get("active_path", []))
-        auto_count = tc.get("auto_advance_count", 0)
-
-        if auto_count >= 3:
-            logger.info("Supervisor: 教学 auto_advance 已达上限(%d) → END", auto_count)
-            tc["auto_advance_count"] = 0
-            return {
-                "current_agent": "supervisor",
-                "next_agent": "END",
-                "context": state.get("context", {}),
-                "teaching_context": tc,
-                "stream_buffer": (
-                    "\n\n---\n"
-                    "> 已连续教学3个节点，暂停一下让你消化。\n"
-                    "> 你可以：**[继续学]** / **[做练习题巩固]** / **[换个主题]**\n"
-                ),
-                "trace": _new_traces,
-            }
-
-        is_stage_boundary = (current_idx > 0 and (current_idx + 1) % 3 == 0)
         is_last_node = (current_idx + 1 >= total)
-
         if is_last_node:
             logger.info("Supervisor: 教学最后一个节点 → END")
-            tc["auto_advance_count"] = 0
             return {
                 "current_agent": "supervisor",
                 "next_agent": "END",
@@ -635,56 +682,15 @@ def _handle_agent_return(state: dict, agent_outputs: dict, current_agent: str,
                 "stream_buffer": "",
                 "trace": _new_traces,
             }
-        elif is_stage_boundary:
-            logger.info("Supervisor: 教学阶段边界 (index=%d/%d) → END with options", current_idx, total)
-            tc["auto_advance_count"] = 0
-            return {
-                "current_agent": "supervisor",
-                "next_agent": "END",
-                "context": state.get("context", {}),
-                "teaching_context": tc,
-                "stream_buffer": "",
-                "trace": _new_traces,
-            }
-        else:
-            logger.info("Supervisor: 教学 auto-advance %d/%d → path_agent", current_idx + 1, total)
-            tc["auto_advance_count"] = auto_count + 1
-            return {
-                "current_agent": "supervisor",
-                "next_agent": "path_agent",
-                "context": {**state.get("context", {}), "teaching_continue": True},
-                "teaching_context": tc,
-                "stream_buffer": "",
-                "trace": _new_traces,
-            }
-
-    # ── v5.2: profile_agent 完成后 → 延迟意图链式路由 ──
-    if current_agent == "profile_agent":
-        ctx = state.get("context") or {}
-        deferred_intent = ctx.get("deferred_intent")
-        if deferred_intent:
-            filled_dims, _ = _get_profile_status(state.get("user_profile"))
-            if len(filled_dims) >= 3:
-                deferred_params = ctx.get("deferred_params", {})
-                _intern_route = {
-                    "profile": "profile_agent",
-                    "resource": "resource_agent",
-                    "question": "question_agent",
-                    "path": "path_agent",
-                    "evaluation": "evaluation_agent",
-                }
-                next_deferred = _intern_route.get(deferred_intent, "chat_agent")
-                logger.info("Supervisor: 画像采集完成(%d/6维) → 路由到延迟意图 %s → %s",
-                            len(filled_dims), deferred_intent, next_deferred)
-                return {
-                    "current_agent": "supervisor",
-                    "next_agent": next_deferred,
-                    "context": {**state.get("context", {}), **(deferred_params or {})},
-                    "stream_buffer": "",
-                    "trace": _new_traces,
-                }
-            else:
-                logger.info("Supervisor: 画像采集中(%d/6维，需≥3) → 等待下一轮", len(filled_dims))
+        logger.info("Supervisor: 教学节点 %d/%d 完成 → END (等待用户确认)", current_idx + 1, total)
+        return {
+            "current_agent": "supervisor",
+            "next_agent": "END",
+            "context": state.get("context", {}),
+            "teaching_context": tc,
+            "stream_buffer": "",
+            "trace": _new_traces,
+        }
 
     # ── QA 协作链 (A→B→A) ──
     if current_agent == "qa_join":
@@ -769,7 +775,24 @@ def _handle_agent_return(state: dict, agent_outputs: dict, current_agent: str,
         else:
             logger.debug("Supervisor: 跳过BKT检测 (agent=%s, _bkt_relevant未设置)", current_agent)
 
-    # ── 默认: 结束当前轮次 ──
+    # ── 默认: 检查是否有未处理的新用户消息 ──
+    # P0-3 (2026-07-12): 不再盲返 END。如果最后一条消息是用户消息(HumanMessage),
+    # 说明新轮次的消息未被处理, 应重置 current_agent 走正常意图分类。
+    _msgs = state.get("messages", [])
+    _last_msg_obj = _msgs[-1] if _msgs else None
+    _last_msg_type = ""
+    if _last_msg_obj:
+        if isinstance(_last_msg_obj, dict):
+            _last_msg_type = (_last_msg_obj.get("type") or "").lower()
+        else:
+            _last_msg_type = (getattr(_last_msg_obj, "type", "") or "").lower()
+    if _last_msg_type == "human":
+        logger.info("Supervisor: 默认分支检测到未处理用户消息, 重置 → 意图分类 (agent=%s)", current_agent)
+        state["current_agent"] = "supervisor"
+        state["agent_outputs"] = {}
+        intent, result = _classify_intent(last_msg, last_msg_lower, _msgs, profile, spark)
+        return _route_with_guards(intent, result, state, profile, last_msg, last_msg_lower,
+                                   _new_traces, _entry_time)
     logger.info("Supervisor: Agent '%s' 已完成，结束当前轮次", current_agent)
     return {
         "current_agent": "supervisor",
@@ -817,9 +840,17 @@ def _classify_intent(last_msg: str, last_msg_lower: str, all_messages: list,
 
         raw = ""
         try:
-            raw = spark.chat_sync(classify_messages, temperature=0.3)
-            result = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
-        except Exception:
+            raw = _llm_breaker.call(spark.chat_sync, classify_messages, temperature=0.3)
+            raw_stripped = raw.strip().removeprefix("```json").removesuffix("```").strip()
+            if not raw_stripped:
+                raise ValueError("LLM returned empty response")
+            result = json.loads(raw_stripped)
+        except CircuitBreakerOpenError:
+            logger.warning("Supervisor: LLM 熔断器开启，使用关键词兜底")
+            raw = "circuit_open"
+            result = {"intent": "chat", "params": {}}
+        except Exception as e:  # 省一 P0-2026-07-11: 修 Python 3.13 隐式 e 移除
+            logger.error("Supervisor LLM 分类失败: %s", e, exc_info=True)
             match = re.search(r'"intent"\s*:\s*"(\w+)"', raw)
             if match:
                 result = {"intent": match.group(1), "params": {}}
@@ -870,10 +901,14 @@ def _route_with_guards(intent: str, result: dict, state: dict, profile: dict,
             next_agent = "resource_agent"
             logger.info("Supervisor: resource explain mode → resource_agent (no collaboration)")
 
-    # QA 协作链初始化
-    if intent == "question":
-        context_result = {**context_result, "_qa_stage": "first_review"}
-        logger.info("Supervisor: QA 协作链 初始化 _qa_stage=first_review")
+    # P2-FIX (2026-07-12): QA 协作链 (A→B→A) 暂禁用
+    # 原因: evaluation_agent 在并行 Send 模式下无法获取 question_agent 输出,
+    # 且 evaluation_agent 无题目审查逻辑(仅评估用户画像/BKT),
+    # 导致 "evaluation_agent 输出缺失" 警告 + 协作链断链
+    # TODO: 实现串行 A→B→A: question_agent → evaluation_agent(审题) → question_agent(修订)
+    # if intent == "question":
+    #     context_result = {**context_result, "_qa_stage": "first_review"}
+    #     logger.info("Supervisor: QA 协作链 初始化 _qa_stage=first_review")
 
     # evaluation 路由: 标记 BKT 相关
     if intent == "evaluation":
@@ -915,11 +950,23 @@ def _route_with_guards(intent: str, result: dict, state: dict, profile: dict,
                              "介绍一下", "你是什么", "有什么功能", "你会什么"]
         _is_casual = any(kw in last_msg_lower for kw in _casual_greetings) or \
                      next_agent in ("profile_agent",)
+        # P0-实用 2026-07-11: path 意图 + 明确路径关键词 → 绕过画像守卫, 用户明确要路径
+        # 解决 "我学 Python, 请给我制定一个学习路线" 实际想看路径, 但被反问画像的体验问题
+        _path_keywords = ["路线", "计划", "规划", "roadmap", "learning path",
+                          "study plan", "learning plan", "给我制定", "给我规划",
+                          "给我一个学习"]
+        _is_path_request = intent == "path" and any(kw in last_msg for kw in _path_keywords)
+        # P0-FIX (2026-07-12): resource/question/evaluation 明确意图也应绕过画像守卫
+        # 修复 "讲解Python环境搭建" 被关键词正确分类为 resource, 但随即被画像守卫拦截
+        # 跳到 profile_agent → 用户看不到资源内容 → 以为卡住
+        _is_explicit_non_chat = intent in ("resource", "question", "evaluation")
         if (len(filled_dims) < 2
                 and not profile_first_done
                 and ask_count < MAX_ASK_PER_SESSION
                 and not _is_emergency
-                and not _is_casual):
+                and not _is_casual
+                and not _is_path_request  # ← P0-实用: 路径意图允许绕过
+                and not _is_explicit_non_chat):  # ← P0-FIX (2026-07-12): resource/question/evaluation 绕过
             logger.info("Supervisor: 画像极稀疏(%d/6维, ask_count=%d) → profile_agent 优先 (defer %s)",
                         len(filled_dims), ask_count, next_agent)
             _agent_node_to_intent = {
@@ -955,6 +1002,15 @@ def _route_with_guards(intent: str, result: dict, state: dict, profile: dict,
 
     logger.info("Supervisor: intent=%s → route=%s", intent, next_agent)
 
+    # ── 清理残留的 replan_path 标志 ──
+    # checkpoint 持久化可能保留上一轮对话的 replan_path=True,
+    # 导致 path_agent 误入 replan_remaining_path 分支再回退, 增加无意义开销
+    _merged_ctx = {**state.get("context", {}), **context_result}
+    if next_agent == "path_agent" and _merged_ctx.get("replan_path") and intent == "path":
+        if not _merged_ctx.get("_replan_reason"):
+            _merged_ctx.pop("replan_path", None)
+            logger.info("Supervisor: 清理残留 replan_path (非 replan 触发的 path 请求)")
+
     # ── Trace: 记录 Supervisor 意图分类 ──
     _supervisor_end = time.time() * 1000
     _in_len_final = len(last_msg) if last_msg else 0
@@ -975,7 +1031,7 @@ def _route_with_guards(intent: str, result: dict, state: dict, profile: dict,
     return {
         "current_agent": "supervisor",
         "next_agent": next_agent,
-        "context": {**state.get("context", {}), **context_result},
+        "context": _merged_ctx,
         "trace": _new_traces,
     }
 
@@ -983,6 +1039,7 @@ def _route_with_guards(intent: str, result: dict, state: dict, profile: dict,
 #state读取当前状态--调用星火api判断意图
 def supervisor_node(state: AgentState, spark: SparkClient) -> dict:
     """Supervisor 节点: 编排器 — 协调辅助函数完成意图分类与路由 (A-01 重构)"""
+    state = AgentState.model_validate(state)
     state = dict(state)
     last_msg = last_msg_content(state.get("messages", []))
     last_msg_lower = last_msg.lower()
@@ -1030,21 +1087,41 @@ def supervisor_node(state: AgentState, spark: SparkClient) -> dict:
     agent_outputs = state.get("agent_outputs", {})
     current_agent = state.get("current_agent", "supervisor")
 
-    # ── 守卫: 新意图检测 ──
-    _already_handled = state.get("context", {}).get("_new_intent_handled")
-    if (not _already_handled
-            and current_agent != "supervisor"
-            and _has_explicit_new_intent(last_msg, last_msg_lower)):
-        logger.info("Supervisor: 检测到新的明确意图 '%s'，重置教学上下文 → 走正常分类", last_msg[:40])
+    # P0-1/P0-2 (2026-07-12): 新轮次检测 + checkpoint 残留清理
+    # 不再用 context._fresh_round (_merge_dict_reducer 合并语义导致无法可靠删除),
+    # 改用 next_agent is None 判断: 只有 initial_state 设置 next_agent=None,
+    # 活跃图流中 path_join/rc_join 等会设置 next_agent="supervisor"
+    _is_fresh_round = (state.get("next_agent") is None)
+    if _is_fresh_round and current_agent != "supervisor":
+        logger.info("Supervisor: next_agent=None 检测到新轮次，重置 checkpoint 残留 current_agent %s → supervisor",
+                    current_agent)
         state["current_agent"] = "supervisor"
-        state["teaching_context"] = None
-        state["context"] = {**state.get("context", {}), "_new_intent_handled": True}
         current_agent = "supervisor"
+
+    # ── 守卫: 新意图检测 (P0-1 2026-07-12 重构) ──
+    # 必须在 current_agent != supervisor 路由之前执行,
+    # 否则新轮次重置后 current_agent=="supervisor" 会绕过检测
+    _already_handled = state.get("context", {}).get("_new_intent_handled")
+    _is_new_intent = (not _already_handled
+                      and _has_explicit_new_intent(last_msg, last_msg_lower))
+    if _is_new_intent:
+        if current_agent != "supervisor":
+            logger.info("Supervisor: 检测到新的明确意图 '%s'，重置 → 走正常分类", last_msg[:40])
+            state["current_agent"] = "supervisor"
+            current_agent = "supervisor"
+        # P0-1 关键修复: 新意图必须清除 checkpoint 残留的 teaching_context,
+        # 防止 tc.mode=="teaching" 将新问题误判为教学继续 → 输出重复内容
+        if state.get("teaching_context"):
+            logger.info("Supervisor: 新意图清除残留 teaching_context (was mode=%s)",
+                        state["teaching_context"].get("mode"))
+            state["teaching_context"] = None
+        state["context"] = {**state.get("context", {}), "_new_intent_handled": True}
 
     # ── 优先级-1: Agent 重入路由 ──
     if current_agent != "supervisor":
         return _handle_agent_return(state, agent_outputs, current_agent,
-                                    last_msg, last_msg_lower, _entry_time, _new_traces)
+                                    last_msg, last_msg_lower, _entry_time, _new_traces,
+                                    profile, spark)
 
     tc = state.get("teaching_context") or {}
 
@@ -1052,8 +1129,10 @@ def supervisor_node(state: AgentState, spark: SparkClient) -> dict:
     if tc.get("mode") == "teaching" and is_teaching_continue(last_msg, tc):
         _tc_ctx = {**state.get("context", {}), "teaching_continue": True}
         # 解析教学引用: 用户指定了具体第X天 → 跳转到目标索引
-        _ref = _resolve_teaching_reference(last_msg, tc)
-        if _ref and _ref.get("index", 0) != tc.get("current_index", 0) + 1:
+        # (P0-FIX 2026-07-11: shared_utils 导出名为 resolve_teaching_reference, 无下划线)
+        _ref = resolve_teaching_reference(last_msg, tc)
+        _cur_idx = tc.get("current_index", 0)
+        if _ref and _ref.get("index", _cur_idx) != _cur_idx + 1:
             _tc_ctx["teach_target_index"] = _ref["index"]
             _tc_ctx["topic"] = _ref["topic"]
             logger.info("Supervisor: 教学跳转 → index=%d node='%s'", _ref["index"], _ref["topic"])
@@ -1120,7 +1199,6 @@ def supervisor_router(state):
     na = state.get("next_agent", "END") if isinstance(state, dict) else getattr(state, "next_agent", "END")
     fork_map = {
         "collaborative_qa": ("question_agent", "evaluation_agent"),
-        "collaborative_resource": ("resource_agent", "quality_reviewer"),
         "collaborative_path": ("path_agent", "prefetch_agent"),
     }
     if na in fork_map:
@@ -1154,7 +1232,6 @@ def build_graph(spark: SparkClient) -> StateGraph:
     workflow.add_node("qa_join", qa_join_node)
     workflow.add_node("rc_join", rc_join_node)
     workflow.add_node("path_join", path_join_node)
-    workflow.add_node("quality_reviewer", lambda s: _quality_review_node(s))
     workflow.add_node("prefetch_agent", _prefetch_resource_meta)
 
     workflow.set_entry_point("supervisor")
@@ -1167,10 +1244,10 @@ def build_graph(spark: SparkClient) -> StateGraph:
             "chat_agent": "chat_agent",
             "profile_agent": "profile_agent",
             "resource_agent": "resource_agent",
+            "collaborative_resource": "resource_agent",
             "question_agent": "question_agent",
             "path_agent": "path_agent",
             "evaluation_agent": "evaluation_agent",
-            "quality_reviewer": "quality_reviewer",
             "prefetch_agent": "prefetch_agent",
             "qa_join": "qa_join",
             "rc_join": "rc_join",
@@ -1185,7 +1262,6 @@ def build_graph(spark: SparkClient) -> StateGraph:
     workflow.add_edge("evaluation_agent", "qa_join")
     workflow.add_edge("qa_join", "supervisor")
     workflow.add_edge("resource_agent", "rc_join")
-    workflow.add_edge("quality_reviewer", "rc_join")
     workflow.add_edge("rc_join", "supervisor")
     workflow.add_edge("path_agent", "path_join")
     workflow.add_edge("prefetch_agent", "path_join")

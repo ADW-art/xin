@@ -1,7 +1,20 @@
 import logging
+import os
+# LOG_LEVEL env → 控制 app.* logger 输出级别 (默认 WARNING, 验收/排障设 INFO)
+# 注意: uvicorn 启动时会重设 logging, 这里我们强制覆盖 root logger 级别
+_log_level = os.environ.get("LOG_LEVEL", "WARNING").upper()
+logging.basicConfig(
+    level=_log_level,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    datefmt='%H:%M:%S',
+    force=True,  # 强制覆盖 uvicorn 的 logging 配置
+)
+# 单独确保 uvicorn 的 logger 不会吞掉 app 日志
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -154,6 +167,13 @@ app.include_router(review_router)
 app.include_router(recommend_router)
 app.include_router(video_router)
 
+# 静态文件挂载 (图片/音频/视频等生成资源)
+_static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+os.makedirs(_static_dir, exist_ok=True)
+os.makedirs(os.path.join(_static_dir, "images"), exist_ok=True)
+os.makedirs(os.path.join(_static_dir, "audio"), exist_ok=True)
+app.mount("/static", StaticFiles(directory=_static_dir), name="static")
+
 @app.on_event("startup")
 async def init_db():
     import asyncio
@@ -245,11 +265,10 @@ async def health_check():
 
     # MySQL check
     try:
-        from app.core.database import SessionLocal
-        from sqlalchemy import text  # SQLAlchemy 2.x 必须显式 text() 包裹字符串 SQL
-        db = SessionLocal()
-        db.execute(text("SELECT 1"))
-        db.close()
+        from app.core.database import get_session
+        from sqlalchemy import text
+        with get_session() as db:
+            db.execute(text("SELECT 1"))
         checks["mysql"] = "ok"
     except Exception as e:
         checks["mysql"] = f"error: {e}"

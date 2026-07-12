@@ -17,7 +17,8 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.agents.supervisor import _keyword_fallback, _is_teaching_continue, _proactive_suggest
+from app.agents.supervisor import _keyword_fallback, _proactive_suggest
+from app.core.shared_utils import is_teaching_continue as _is_teaching_continue
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -223,8 +224,9 @@ class TestProactiveSuggest:
         assert "评估后推荐针对性学习" in result.get("reason", "")
 
     def test_after_path_agent_suggests_resource(self):
-        """路径规划完成后 → 推荐开始学习"""
-        result = _proactive_suggest("path_agent", {})
+        """路径规划完成后(教学流中) → 推荐开始学习"""
+        # P1-FIX: teaching_stage 标记区分"教学流中的路径规划"与"用户要学习计划"
+        result = _proactive_suggest("path_agent", {"teaching_stage": "planned"})
         assert result is not None
         assert result["intent"] == "resource"
         assert "规划后推荐开始学习" in result.get("reason", "")
@@ -244,14 +246,14 @@ class TestProactiveSuggest:
         })
         assert result is None
 
-    def test_question_grade_high_mastery_suggests_resource(self):
-        """评阅后正确率高 → 推荐进阶"""
+    def test_question_grade_high_mastery_suggests_path(self):
+        """评阅后正确率高 → 推荐推进学习路径"""
         result = _proactive_suggest("question_agent", {
             "mode": "grade",
             "bkt_p_known": 0.85,
         })
         assert result is not None
-        assert result["intent"] == "resource"
+        assert result["intent"] == "path"
 
     def test_question_grade_low_mastery_suggests_resource(self):
         """评阅后正确率低 → 推荐复习"""

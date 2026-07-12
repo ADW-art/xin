@@ -19,7 +19,7 @@ def _extract_content(msg) -> str:
     return getattr(msg, "content", "") or ""
 
 
-def safe_get_content(msg) -> str | list:
+def safe_get_content(msg) -> "str | list":
     """通用: 安全获取单条消息的 content 字段
 
     与 _extract_content 区别: 不做 or "" 兜底,保留原始类型
@@ -34,8 +34,10 @@ def safe_get_content(msg) -> str | list:
     if msg is None:
         return ""
     if isinstance(msg, dict):
-        return msg.get("content", "")
-    return getattr(msg, "content", "")
+        v = msg.get("content", "")
+        return "" if v is None else v
+    v = getattr(msg, "content", "")
+    return "" if v is None else v
 
 
 def last_msg_content(messages, default: str = "") -> str:

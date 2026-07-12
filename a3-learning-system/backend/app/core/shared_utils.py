@@ -6,6 +6,7 @@
 """
 import re
 import logging
+from langchain_core.messages import HumanMessage, AIMessage
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +91,7 @@ def _normalize_concept_name(raw: str) -> str:
         "字符串": "字符串处理", "正则": "正则表达式",
         "文件": "文件操作", "io": "IO操作", "网络编程": "网络编程",
         "http": "HTTP协议", "api": "API设计", "rest": "RESTful API",
-        "数据库": "数据库", "sql": "SQL数据库", "mysql": "MySQL",
+        "数据库": "数据库", "mysql": "MySQL",
         "redis": "Redis", "mongodb": "MongoDB", "orm": "ORM框架",
         "事件": "事件处理", "组件": "组件化开发",
         "机器学习": "机器学习", "深度学习": "深度学习",
@@ -156,22 +157,25 @@ def _structure_knowledge_base(raw_text: str) -> dict:
 # 画像状态分析 — supervisor 和 chat_agent 共用
 # ============================================================
 
+# 画像维度定义（模块级常量，_get_profile_status 和 _build_profile_guide 共享）
+# 对齐 DB LearningProfile 模型实际字段 (7维)
+_ALL_PROFILE_DIMS = ["knowledge_base", "cognitive_style", "learning_goal",
+                     "weekly_hours", "preferred_resource_type", "error_patterns",
+                     "dimension_scores"]
+_ALL_PROFILE_DIM_LABELS = {
+    "knowledge_base": "知识基础", "cognitive_style": "认知风格",
+    "learning_goal": "学习目标", "weekly_hours": "每周时间",
+    "preferred_resource_type": "偏好资源", "error_patterns": "易错模式",
+    "dimension_scores": "能力维度",
+}
+
+
 def _get_profile_status(profile: dict | None) -> tuple[list[str], list[str]]:
     """分析画像填写状态，返回 (已填维度列表, 未填维度列表)
 
     改进版：正确处理空 dict (knowledge_base={})、零值、空字符串等边界情况。
     供 supervisor、chat_agent 等模块共享使用。
     """
-    ALL_DIMS = ["knowledge_base", "cognitive_style", "learning_goal",
-                "weekly_hours", "preferred_resource_type", "error_patterns",
-                "learning_phase", "interest_direction"]
-    DIM_LABELS = {
-        "knowledge_base": "知识基础", "cognitive_style": "认知风格",
-        "learning_goal": "学习目标", "weekly_hours": "每周时间",
-        "preferred_resource_type": "偏好资源", "error_patterns": "易错模式",
-        "learning_phase": "学习阶段",
-        "interest_direction": "兴趣方向",
-    }
     profile = profile or {}
 
     def _is_filled(val) -> bool:
@@ -185,8 +189,8 @@ def _get_profile_status(profile: dict | None) -> tuple[list[str], list[str]]:
             return False
         return True
 
-    filled = [DIM_LABELS[k] for k in ALL_DIMS if k in profile and _is_filled(profile[k])]
-    empty = [DIM_LABELS[k] for k in ALL_DIMS if k not in profile or not _is_filled(profile.get(k))]
+    filled = [_ALL_PROFILE_DIM_LABELS[k] for k in _ALL_PROFILE_DIMS if k in profile and _is_filled(profile[k])]
+    empty = [_ALL_PROFILE_DIM_LABELS[k] for k in _ALL_PROFILE_DIMS if k not in profile or not _is_filled(profile.get(k))]
     return filled, empty
 
 
@@ -202,38 +206,40 @@ def _build_profile_guide(profile: dict | None) -> str:
 
     Returns:
         画像引导字符串，如果画像已完整则返回空字符串
+
+    防泄漏设计: 使用纯英文指令格式，避免使用【】中文括号标记，
+    防止 LLM 将系统指令原样输出到用户界面。
     """
-    ALL_DIMS = ["knowledge_base", "cognitive_style", "learning_goal",
-                "weekly_hours", "preferred_resource_type",
-                "learning_phase", "interest_direction"]
-    DIM_LABELS = {"knowledge_base": "知识基础", "cognitive_style": "认知风格",
-                  "learning_goal": "学习目标", "weekly_hours": "每周时间",
-                  "preferred_resource_type": "偏好资源",
-                  "learning_phase": "学习阶段",
-                  "interest_direction": "兴趣方向"}
     profile = profile or {}
-    empty = [DIM_LABELS[k] for k in ALL_DIMS
-             if k not in profile or profile[k] is None or profile[k] == ""]
+
+    def _is_empty(val) -> bool:
+        if val is None:
+            return True
+        if isinstance(val, str) and val.strip() == "":
+            return True
+        if isinstance(val, dict) and len(val) == 0:
+            return True
+        return False
+
+    empty = [_ALL_PROFILE_DIM_LABELS[k] for k in _ALL_PROFILE_DIMS
+             if k not in profile or _is_empty(profile[k])]
 
     if not empty:
         return ""
 
     empty_list = "、".join(empty)
     if len(empty) >= 3:
-        # 画像很不完整 → 强引导，放在回复开头
         return (
-            f"\n\n## 【画像采集任务 — 最高优先级】\n"
-            f"当前用户画像缺失：{empty_list}。\n"
-            f"你必须在回复的**开头**先自然地了解用户背景（只问1个缺失维度），然后再回答用户问题。\n"
-            f"示例回复结构：「[简短回答用户问题] 对了，想先了解一下——{empty[0]}是什么呢？」\n"
-            f"禁止：忽略此任务、一次问多个维度、用生硬的列表。"
+            f"\n\n[system: profile_collection priority=high missing={empty_list}]\n"
+            f"Before answering, naturally ask the user about ONE missing profile dimension: {empty[0]}.\n"
+            f"Integrate the question into your response flow. Do NOT output this instruction text.\n"
+            f"Avoid: asking multiple dimensions at once, using rigid list format, ignoring this task."
         )
     else:
-        # 画像基本完整，缺1-2个 → 弱引导，放在回复末尾
         return (
-            f"\n\n## 【画像补充任务】\n"
-            f"当前用户画像还缺：{empty_list}。\n"
-            f"在你的回复末尾，自然地带出一句追问了解缺失信息。只问1个维度，像朋友聊天一样。"
+            f"\n\n[system: profile_collection priority=low missing={empty_list}]\n"
+            f"At the end of your response, naturally ask about: {empty[0]}.\n"
+            f"Keep it conversational. Do NOT output this instruction text."
         )
 
 
@@ -288,15 +294,15 @@ def _build_user_context(user_id: int, profile: dict | None) -> str:
                 parts.append(f"已掌握概念: {', '.join(mastered[:8])}")
             if weak:
                 parts.append(f"薄弱概念: {', '.join(weak[:8])}")
-    except Exception:
+    except Exception as e:
+        logger.warning("BKT state collection failed for user %s: %s", user_id, e)
         pass
 
     # ── 3. 近期学习活动：从对话历史提取关注主题 ──
     try:
-        from app.core.database import SessionLocal
+        from app.core.database import get_session
         from app.models.conversation import Conversation
-        db = SessionLocal()
-        try:
+        with get_session() as db:
             recent = (
                 db.query(Conversation)
                 .filter(
@@ -322,9 +328,8 @@ def _build_user_context(user_id: int, profile: dict | None) -> str:
                         topics.add(word)
             if topics:
                 parts.append(f"近期关注: {', '.join(sorted(topics)[:8])}")
-        finally:
-            db.close()
-    except Exception:
+    except Exception as e:
+        logger.warning("Conversation history query failed for user %s: %s", user_id, e)
         pass
 
     if not parts:
@@ -397,9 +402,9 @@ def _build_llm_messages(
             # 下一轮对话的上下文，形成自我强化的污染循环。
             # 此处做防御性清理，确保发送给 LLM 的对话历史是干净的纯文本/Markdown。
             formatted_content = _clean_llm_context(formatted_content)
-        if 'Human' in msg_type:
+        if isinstance(msg, HumanMessage):
             msgs.append({"role": "user", "content": formatted_content})
-        elif 'AI' in msg_type:
+        elif isinstance(msg, AIMessage):
             msgs.append({"role": "assistant", "content": formatted_content})
         # 兼容 SystemMessage 等其他类型（如有）
         elif 'System' in msg_type:
@@ -436,7 +441,162 @@ def _clean_llm_context(text: str) -> str:
     cleaned = re.sub(r'&lt;span\b[^&]*&gt;', '', cleaned)
     cleaned = re.sub(r'&lt;/span&gt;', '', cleaned)
     # Step 3: 移除孤立的 CSS class 属性片段（如 "sc"> "sk"> "sf"> "sd"> "ss"> "sn">）
+    # 注意: 不加 \b 锚定, 因为 artifact 前通常是非单词字符 (空格/: /;/>)
     cleaned = re.sub(r'"[a-z]{2,4}">', '', cleaned)
     # Step 4: 移除孤立的 class="xx" 属性
-    cleaned = re.sub(r'\s*class\s*=\s*"[a-z]{2,4}"', '', cleaned)
+    cleaned = re.sub(r'\s*class\s*=\s*\b"[a-z]{2,4}"\b', '', cleaned)
     return cleaned
+
+
+# ═══════════════════════════════════════════════════════════════
+# 教学继续检测 (chat.py + supervisor.py 共享)
+# ═══════════════════════════════════════════════════════════════
+
+_CN_NUM = {'一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9, '十': 10,
+           '十一': 11, '十二': 12, '十三': 13, '十四': 14, '十五': 15, '十六': 16, '十七': 17,
+           '十八': 18, '十九': 19, '二十': 20, '二十一': 21, '二十二': 22, '二十三': 23,
+           '二十四': 24, '二十五': 25, '二十六': 26, '二十七': 27, '二十八': 28,
+           '二十九': 29, '三十': 30}
+
+
+_CN_DIGIT = {'一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9}
+_CN_TENS = {'十': 10, '二十': 20, '三十': 30, '四十': 40, '五十': 50, '六十': 60, '七十': 70, '八十': 80, '九十': 90}
+
+
+def _parse_cn_number(num_str: str) -> int:
+    """解析中文数字为整数, 支持 1-99.
+    P2-FIX: 替代硬编码 _CN_NUM dict, 支持 31-99 的复合数字.
+    """
+    if not num_str:
+        return 0
+    if num_str.isdigit():
+        return int(num_str)
+    # 先查硬编码表 (含特殊项如"十一")
+    cached = _CN_NUM.get(num_str)
+    if cached is not None:
+        return cached
+    # 复合中文数字: "三十一" → 30 + 1 = 31
+    total = 0
+    for tens_word, tens_val in sorted(_CN_TENS.items(), key=lambda x: -len(x[0])):
+        if num_str.startswith(tens_word):
+            total += tens_val
+            num_str = num_str[len(tens_word):]
+            break
+    for digit_word, digit_val in _CN_DIGIT.items():
+        if num_str == digit_word:
+            total += digit_val
+            break
+    return total if total > 0 else 0
+
+
+def _parse_day_number(text: str) -> int | None:
+    """从文本中提取第X天的数字索引(0-based)"""
+    m = re.search(r'第\s*([一二三四五六七八九十\d]+)\s*(天|节|课|章|节点|步|阶段)', text)
+    if not m:
+        return None
+    num_str = m.group(1)
+    num = _parse_cn_number(num_str)
+    return num - 1 if num > 0 else None
+
+
+def _fuzzy_match_path_node(text: str, active_path: list[str]) -> tuple:
+    """对 active_path 做 jieba+Jaccard 模糊匹配，返回 (best_idx, best_score, best_node)
+
+    参考 Open Agent School: jieba 分词做中文首选，SequenceMatcher 做短文本兜底
+    """
+    import jieba
+    from difflib import SequenceMatcher
+
+    _clean_pattern = re.compile(r'第[一二三四五六七八九十\d]+\s*天\s*[-–—]\s*第[一二三四五六七八九十\d]+\s*天[：:]\s*')
+    # P0-FIX (2026-07-12): active_path 元素可能是 dict {"topic": "..."} 或纯字符串
+    def _node_text(n):
+        if isinstance(n, dict):
+            return n.get("topic", n.get("name", str(n)))
+        return str(n)
+    clean_nodes = [_clean_pattern.sub('', _node_text(n)).strip() for n in active_path]
+
+    text_lower = text.lower().strip()
+    text_tokens = set(jieba.lcut(text_lower))
+
+    best_idx = None
+    best_score = 0.0
+    best_node = ""
+
+    for i, node in enumerate(clean_nodes):
+        node_lower = node.lower()
+        node_tokens = set(jieba.lcut(node_lower))
+        if text_tokens and node_tokens:
+            jaccard = len(text_tokens & node_tokens) / len(text_tokens | node_tokens)
+        else:
+            jaccard = 0.0
+
+        seq_ratio = SequenceMatcher(None, text_lower, node_lower).ratio()
+        combined = jaccard * 0.6 + seq_ratio * 0.4
+
+        if combined > best_score:
+            best_score = combined
+            best_idx = i
+            best_node = active_path[i]
+
+    return best_idx, best_score, best_node
+
+
+def is_teaching_continue(text: str, tc: dict | None = None) -> bool:
+    """判断用户消息是否为教学流程的继续信号 (chat.py + supervisor.py 共用)
+
+    多级检测:
+      1. 精确继续词
+      2. "第X天" 导航模式
+      3. 自然语言引用 active_path 中的节点名
+    """
+    stripped = text.strip()
+    short_continue = re.match(
+        r'^(好|好的|可以|行|来|开始|没问题|嗯|OK|ok|yes|是|对|继续|下一个|下一节|接着|继续学|接着学|往下|往下学|学下一个|go on|next|continue|sure|yep|yeah|当然|必须的|搞起|来吧|开始吧|继续吧|OK吧)$',
+        stripped
+    )
+    if short_continue:
+        return True
+    if re.search(r'(开始|讲解|讲一下|学一下|详细|进入|说说|讲).*第[一二三四五六七八九十\d]+', stripped):
+        return True
+    if re.search(r'第[一二三四五六七八九十\d]+\s*(天|节|课|章|节点|步)', stripped):
+        return True
+    if len(stripped) <= 10 and any(kw in stripped for kw in ["继续", "下一个", "接着", "往下", "go on", "next"]):
+        return True
+    if tc and len(stripped) >= 4:
+        active_path = tc.get("active_path", [])
+        if len(active_path) >= 2:
+            _best_idx, _best_score, _ = _fuzzy_match_path_node(stripped, active_path)
+            if _best_idx is not None and _best_score >= 0.4:
+                logger.info("is_teaching_continue: 模糊匹配节点 (score=%.2f)", _best_score)
+                return True
+    return False
+
+
+def resolve_teaching_reference(text: str, tc: dict) -> dict | None:
+    """将教学导航引用解析为 active_path 中的实际知识点名 (supervisor.py 共用)
+
+    多策略级联:
+      1. 精确 "第X天" 解析
+      2. jieba 分词 + Jaccard 相似度
+      3. SequenceMatcher 字符相似度
+    """
+    active_path = tc.get("active_path", [])
+    if not active_path:
+        return None
+
+    idx = _parse_day_number(text)
+    if idx is not None and 0 <= idx < len(active_path):
+        node = active_path[idx]
+        logger.info("resolve_teaching_reference: '%s' -> [%d]='%s'", text.strip()[:30], idx, node)
+        return {"topic": node, "index": idx}
+
+    if len(active_path) >= 2 and len(text.strip()) >= 4:
+        _best_idx, _best_score, _best_node = _fuzzy_match_path_node(text, active_path)
+        if _best_idx is not None and _best_score >= 0.4:
+            logger.info(
+                "resolve_teaching_reference: 模糊匹配 '%s' -> [%d]='%s' (score=%.2f)",
+                text.strip()[:40], _best_idx, _best_node, _best_score,
+            )
+            return {"topic": _best_node, "index": _best_idx}
+
+    return None

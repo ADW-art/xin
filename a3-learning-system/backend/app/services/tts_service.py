@@ -15,12 +15,36 @@ from datetime import datetime
 from urllib.parse import urlencode
 import websocket
 
+import re
+
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 TTS_URL = "wss://tts-api.xfyun.cn/v2/tts"
 TTS_HOST = "tts-api.xfyun.cn"
+
+# Markdown 清洗正则 (TTS 朗读前移除格式标记)
+_MD_CLEAN_PATTERNS = [
+    (re.compile(r'#{1,6}\s+'), ''),           # 标题
+    (re.compile(r'\*\*(.+?)\*\*'), r'\1'),     # 粗体
+    (re.compile(r'\*(.+?)\*'), r'\1'),         # 斜体
+    (re.compile(r'`{1,3}[^`]*`{1,3}'), ''),   # 代码
+    (re.compile(r'\|[^|]*\|'), ''),            # 表格行
+    (re.compile(r'---+'), ''),                 # 分隔线
+    (re.compile(r'\[([^\]]+)\]\([^)]+\)'), r'\1'),  # 链接
+    (re.compile(r'^>\s+', re.MULTILINE), ''),  # 引用
+    (re.compile(r'^[\s]*[-*+]\s+', re.MULTILINE), ''),  # 列表
+]
+
+
+def _clean_markdown(text: str) -> str:
+    """移除 Markdown 格式标记，保留纯文本供 TTS 朗读"""
+    for pattern, replacement in _MD_CLEAN_PATTERNS:
+        text = pattern.sub(replacement, text)
+    # 压缩多余空行
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
 
 
 def _get_tts_auth_url() -> str:
@@ -49,7 +73,12 @@ def synthesize_speech(text: str, voice: str = "xiaoyan", speed: int = 50) -> byt
         voice: 发音人 xiaoyan/xiaoyu/xiaofeng/xiaomei/xiaojing
         speed: 语速 0-100
     """
-    if not text or len(text) > 500:
+    if not text:
+        return None
+
+    # 清洗 Markdown 格式标记，保留纯文本供朗读
+    text = _clean_markdown(text)
+    if len(text) > 500:
         text = text[:500]
 
     app_id = settings.tts_app_id or settings.spark_app_id

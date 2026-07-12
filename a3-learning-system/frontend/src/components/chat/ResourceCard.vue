@@ -91,7 +91,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { View, Microphone, VideoPlay, WarningFilled, Document, DataBoard, EditPen, Monitor, VideoCamera } from '@element-plus/icons-vue'
+import { View, Microphone, VideoPlay, WarningFilled, Document, DataBoard, EditPen, Monitor, VideoCamera, Notebook, Headset } from '@element-plus/icons-vue'
 
 const props = defineProps<{
   resourceType: string
@@ -121,6 +121,9 @@ const resIcon = computed(() => {
     question_set: EditPen,
     video_script: VideoPlay,
     code_example: Monitor,
+    notebook: Notebook,
+    audio_lecture: Headset,
+    video_animation: VideoCamera,
   }
   return map[resolvedType.value] || Document
 })
@@ -132,6 +135,9 @@ const typeLabel = computed(() => {
     question_set: '练习题集',
     video_script: '视频脚本',
     code_example: '代码案例',
+    notebook: 'Notebook',
+    audio_lecture: '语音讲解',
+    video_animation: 'AI 视频',
   }
   return map[resolvedType.value] || '学习资源'
 })
@@ -232,6 +238,9 @@ function goToSlideshow() {
 .rc-tag.code_example { color: #8b5cf6; }
 .rc-tag.question_set { color: #f59e0b; }
 .rc-tag.video_script { color: #3b82f6; }
+.rc-tag.notebook      { color: #F59E0B; }
+.rc-tag.audio_lecture { color: #10B981; }
+.rc-tag.video_animation { color: #8B5CF6; }
 .rc-title {
   font-size: 13px; font-weight: 600;
   color: var(--text-primary);

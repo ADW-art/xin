@@ -22,6 +22,7 @@ _os.environ.setdefault("CHROMA_TELEMETRY_DISABLED", "True")
 _os.environ.setdefault("POSTHOG_DISABLED", "True")
 
 import logging as _logging
+import threading as _threading
 # 拦截 posthog / chromadb.telemetry 的 logger，ERROR 以下全部丢弃
 _telemetry_loggers = [
     "chromadb", "chromadb.telemetry", "chromadb.telemetry.product",
@@ -32,6 +33,8 @@ for _name in _telemetry_loggers:
     _lg.setLevel(_logging.CRITICAL + 1)
     _lg.disabled = True
     _lg.propagate = False
+
+logger = _logging.getLogger(__name__)
 
 # Monkey-patch posthog.capture：让 chromadb 内部的 telemetry 调用静默返回
 try:
@@ -46,42 +49,59 @@ from app.config import settings as _settings
 
 _client = None
 _collections: dict[str, any] = {}
+_lock = _threading.RLock()  # P1-5: RLock 支持重入, 避免 get_collection → get_client 死锁
 
 #建立连接
 def get_client():
-    """获取 ChromaDB 客户端（单例模式，优先 PersistentClient）"""
+    """获取 ChromaDB 客户端（单例模式，优先 HTTP，PersistentClient 兜底）
+
+    P1-4 (2026-07-12): 优先 HTTP client (Docker:8000)，避免 PersistentClient
+    打开大 sqlite3 文件 (969MB+) 时阻塞整个 asyncio event loop。
+    """
     global _client
     if _client is None:
-        # 尝试 PersistentClient（本地存储，不依赖 Docker）
-        try:
-            import os
-            local_path = _settings.chroma_persist_dir or os.path.join(os.path.dirname(__file__), "..", "..", "chroma_data_local")
-            local_path = os.path.abspath(local_path)
-            _client = chromadb.PersistentClient(
-                path=local_path,
-                settings=ChromaSettings(anonymized_telemetry=False),
-            )
-        except Exception:
-            # 降级到 HTTP Client（Docker）
-            _client = chromadb.HttpClient(
-                host="localhost",
-                port=8000,
-                settings=ChromaSettings(anonymized_telemetry=False),
-            )
+        with _lock:
+            if _client is None:
+                # 优先 HTTP client (Docker ChromaDB on :8000)
+                try:
+                    _client = chromadb.HttpClient(
+                        host="localhost",
+                        port=8000,
+                        settings=ChromaSettings(anonymized_telemetry=False),
+                    )
+                    logger.info("ChromaDB: HttpClient 初始化成功 localhost:8000")
+                except Exception as e:
+                    # 兜底: PersistentClient（本地文件存储）
+                    logger.warning("ChromaDB: HttpClient 失败(%s), 降级到 PersistentClient", e)
+                    import os
+                    local_path = _settings.chroma_persist_dir or os.path.join(os.path.dirname(__file__), "..", "..", "chroma_data_local")
+                    local_path = os.path.abspath(local_path)
+                    _client = chromadb.PersistentClient(
+                        path=local_path,
+                        settings=ChromaSettings(anonymized_telemetry=False),
+                    )
+                    logger.info("ChromaDB: PersistentClient 初始化成功 path=%s", local_path)
     return _client
 
 #创建知识库
 def get_collection(name: str):
-    """获取或创建 Collection（按名称缓存，避免重复创建）"""
+    """获取或创建 Collection（按名称缓存，线程安全）"""
     if name not in _collections:
-        client = get_client()
-        try:
-            _collections[name] = client.get_collection(name)    # 已存在 → 获取
-        except Exception:
-            try:
-                _collections[name] = client.create_collection(name)  # 不存在 → 创建
-            except Exception:
-                _collections[name] = client.get_collection(name)  # 并发创建冲突 → 直接获取
+        with _lock:
+            if name not in _collections:
+                client = get_client()
+                try:
+                    _collections[name] = client.get_collection(name)    # 已存在 → 获取
+                    logger.debug("ChromaDB: 获取已有 collection '%s'", name)
+                except Exception as e:
+                    logger.warning("ChromaDB: get_collection('%s') 失败(%s), 尝试创建", name, e)
+                    try:
+                        _collections[name] = client.create_collection(name)  # 不存在 → 创建
+                        logger.info("ChromaDB: 创建新 collection '%s'", name)
+                    except Exception as e2:
+                        # P0-FIX: 并发创建冲突 → 直接获取（不再静默吞错）
+                        logger.warning("ChromaDB: create_collection('%s') 失败(%s), 尝试并发获取", name, e2)
+                        _collections[name] = client.get_collection(name)
     return _collections[name]
 
 #1.批量添加指定文档
@@ -115,10 +135,14 @@ def search_in_collection(name: str, query_embedding: list[float], n: int = 3) ->
     """在 Collection 中检索与查询向量最相似的 n 条文档"""
     col = get_collection(name)
     results = col.query(query_embeddings=[query_embedding], n_results=n)
+    # P0-FIX: 防护 0 结果时 IndexError — results["documents"] 可能是空列表
+    docs = results.get("documents", [[]])
+    metas = results.get("metadatas", [[]])
+    dists = results.get("distances", [[]])
     return {
-        "documents": results["documents"][0],
-        "metadatas": results["metadatas"][0],
-        "distances": results["distances"][0],
+        "documents": docs[0] if docs else [],
+        "metadatas": metas[0] if metas else [],
+        "distances": dists[0] if dists else [],
     }
 
 #3.删除

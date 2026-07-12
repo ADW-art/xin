@@ -11,7 +11,6 @@
       <div v-if="agent && role === 'assistant'" class="ah">
         <span class="ah-name">{{ agentLabel(agent) }}</span>
           <span v-if="collabAgents && collabAgents.length > 1" class="collab-badge">&#9889; {{ collabAgents.join(' + ') }}</span>
-          <span v-if="collabAgents && collabAgents.length > 1" class="collab-badge">&#9889; ??</span>
         <span v-if="resolvedResourceType" class="ah-badge" :class="resolvedResourceType">
           {{ resourceTypeLabel(resolvedResourceType) }}
         </span>
@@ -210,6 +209,9 @@ const RESOURCE_TYPE_LABELS: Record<string, string> = {
   question_set: '练习题集',
   video_script: '视频脚本',
   code_example: '代码案例',
+  reading_material: '拓展阅读',
+  diagram: '图解说明',
+  smart_tutoring: '智能辅导',
 }
 
 function resourceTypeLabel(type?: string): string {
@@ -247,6 +249,9 @@ const resourceIcon = computed<string>(() => {
     question_set: 'List',
     video_script: 'VideoCamera',
     code_example: 'Monitor',
+    reading_material: 'Reading',
+    diagram: 'PictureFilled',
+    smart_tutoring: 'StarFilled',
   }
   return icons[resolvedResourceType.value || ''] || 'Document'
 })
@@ -283,12 +288,6 @@ const isSlideshowType = computed(() => {
   const t = resolvedResourceType.value
   return t === 'document' || t === 'video_script'
 })
-
-function goToSlideshow() {
-  if (props.resourceId) {
-    router.push(`/resources/${props.resourceId}?mode=slideshow`)
-  }
-}
 
 /* ══════════════════════════════════════════════
    内容段解析 — 分离文本和代码块
@@ -397,29 +396,7 @@ function renderMarkdown(md: string): string {
   }
 }
 
-/* ── 流式模式的 rendered（保持原有行为） ── */
-
-const rendered = computed(() => {
-  if (!props.content && props.isStreaming) {
-    return '<div class="streaming-loader"><span></span><span></span><span></span></div>'
-  }
-  if (props.isStreaming && props.content) {
-    const cleaned = (props.content || '')
-      .replace(/<span\b[^>]*>/gi, '')
-      .replace(/<\/span>/gi, '')
-      .replace(/<div\b[^>]*>/gi, '')
-      .replace(/<\/div>/gi, '')
-      .replace(/&lt;span\b[^&]*&gt;/gi, '')
-      .replace(/&lt;\/span&gt;/gi, '')
-      .replace(/"(?:sk|ss|sc|sn|sf|sd|hl|k|n|s|f|d|c|o|p|w|kc|kp)">/gi, '')
-      .replace(/\s*class\s*=\s*"(?:sk|ss|sc|sn|sf|sd)[^"]*"/gi, '')
-    return '<p>' + cleaned.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>') + '</p>'
-  }
-  // 非流式模式由 segment 渲染接管
-  return ''
-})
-
-/* ──── Mermaid 图渲染 ──── */
+/* ── Mermaid 图渲染 ── */
 
 async function renderMermaidDiagrams() {
   await import('vue').then(m => m.nextTick())
@@ -442,6 +419,22 @@ async function renderMermaidDiagrams() {
         ADD_ATTR: ['viewBox', 'fill', 'stroke', 'stroke-width', 'd', 'width', 'height'],
       })
       me.classList.add('mermaid-rendered')
+      // Wrap with container + download button
+      const wrapper = document.createElement('div')
+      wrapper.className = 'mermaid-diagram-wrap'
+      me.parentNode?.insertBefore(wrapper, me)
+      wrapper.appendChild(me)
+      const btn = document.createElement('button')
+      btn.className = 'mermaid-download-btn'
+      btn.title = '下载PNG'
+      btn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>'
+      btn.onclick = () => {
+        const svgEl = me.querySelector('svg')
+        if (svgEl) {
+          import('@/utils/export').then(m => m.svgElementToPngDownload(svgEl, 'diagram.png'))
+        }
+      }
+      wrapper.appendChild(btn)
     } catch (_) { me.classList.add('mermaid-error') }
   }
 }
@@ -469,24 +462,21 @@ function stopTts() {
     ttsAudio.pause()
     ttsAudio.currentTime = 0
   }
-  function goToSlideshow() {
-    if (props.resourceId) {
-      showInlineSlide.value = true
-      getResource(props.resourceId).then(function(r) {
-        slideContent.value = r.content || ''
-      }).catch(function() {
-        ElMessage.error('加载资源失败')
-        showInlineSlide.value = false
-      })
-    }
-  }
-
   ttsPlaying.value = false
 }
 
-function openVideoResource() {
-    goToSlideshow()
+function goToSlideshow() {
+  if (props.resourceId) {
+    showInlineSlide.value = true
+    getResource(props.resourceId).then(function(r) {
+      slideContent.value = r.content || ''
+    }).catch(function() {
+      ElMessage.error('加载资源失败')
+      showInlineSlide.value = false
+    })
   }
+}
+
 async function openInlineVideo() {
   if (videoUrl.value) {
     showInlineVideo.value = true
@@ -703,6 +693,38 @@ function onBubbleClick(e: MouseEvent) {
   border: 1px solid rgba(37,99,235,.1);
 }
 
+/* ═══════════ Mermaid diagram wrapper + download button ═══════════ */
+.mermaid-diagram-wrap {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+}
+.mermaid-download-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid #CBD5E1;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.9);
+  color: #64748B;
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.2s ease;
+}
+.mermaid-diagram-wrap:hover .mermaid-download-btn {
+  opacity: 1;
+}
+.mermaid-download-btn:hover {
+  background: #EFF6FF;
+  border-color: #2563EB;
+  color: #2563EB;
+}
+
 /* ═══════════ Agent header ═══════════ */
 .ah {
   display: flex;
@@ -734,6 +756,9 @@ function onBubbleClick(e: MouseEvent) {
 .ah-badge.code_example { background: rgba(139,92,246,.12); color: #8B5CF6; border-color: rgba(139,92,246,.2); }
 .ah-badge.question_set { background: rgba(245,158,11,.12); color: #F59E0B; border-color: rgba(245,158,11,.2); }
 .ah-badge.video_script { background: rgba(59,130,246,.12); color: #3B82F6; border-color: rgba(59,130,246,.2); }
+.ah-badge.reading_material { background: rgba(6,182,212,.12); color: #06B6D4; border-color: rgba(6,182,212,.2); }
+.ah-badge.diagram { background: rgba(139,92,246,.12); color: #8B5CF6; border-color: rgba(139,92,246,.2); }
+.ah-badge.smart_tutoring { background: rgba(245,158,11,.12); color: #F59E0B; border-color: rgba(245,158,11,.2); }
 .user .ah-badge { background: rgba(255,255,255,.2); color: #fff; border-color: rgba(255,255,255,.25); }
 
 /* ═══════════ Body / Markdown — 强制深色文字 ═══════════ */

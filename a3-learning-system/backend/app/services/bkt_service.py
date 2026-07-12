@@ -53,11 +53,12 @@ import json
 import logging
 import math
 import os
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
-from app.core.database import SessionLocal
+from app.core.database import get_session
 from app.models.bkt_state import BKTState
 
 logger = logging.getLogger(__name__)
@@ -189,6 +190,11 @@ class KnowledgeNode:
         # v4: EM 拟合结果缓存
         self._em_fit: Optional[EMFitResult] = None
 
+        # P1-#6 (2026-07-11): 标记是否"真实学习节点" vs "默认占位节点"
+        # 真实节点 = 用户答过题 / 系统识别到
+        # 默认节点 = 仅占位, 用户未学习 (避免 quality_reviewer 报 0/9 误判)
+        self.is_real: bool = False  # 默认 False, update() 后变 True
+
         self._dirty: bool = False
 
     # ── 属性访问器（优先使用个性化/拟合参数，回退到全局默认）──
@@ -229,6 +235,9 @@ class KnowledgeNode:
         Returns:
             UpdateStep 包含本次更新的所有中间值和最终结果
         """
+        # P1-#6 (2026-07-11): 一旦 update 触发, 节点变为"真实学习节点"
+        self.is_real = True
+
         p_known = self.p_known
         p_lrn = self.p_learn
         p_gue = self.p_guess
@@ -828,35 +837,32 @@ class BKTTracker:
         """从 MySQL 加载该用户的所有 BKT 历史状态（含个性化参数 + EM 拟合标记）"""
         if not self.user_id:
             return
-        db = SessionLocal()
         try:
-            rows = db.query(BKTState).filter(BKTState.user_id == self.user_id).all()
-            for row in rows:
-                # 判断参数来源
-                has_custom = any(getattr(row, attr) is not None
-                                 for attr in ['p_learn', 'p_guess', 'p_slip', 'p_forget'])
-                source = ParamSource.CUSTOM if has_custom else ParamSource.DEFAULT
+            with get_session() as db:
+                rows = db.query(BKTState).filter(BKTState.user_id == self.user_id).all()
+                for row in rows:
+                    has_custom = any(getattr(row, attr) is not None
+                                     for attr in ['p_learn', 'p_guess', 'p_slip', 'p_forget'])
+                    source = ParamSource.CUSTOM if has_custom else ParamSource.DEFAULT
 
-                node = KnowledgeNode(
-                    name=row.concept,
-                    p_known=row.p_known,
-                    p_learn=row.p_learn,
-                    p_guess=row.p_guess,
-                    p_slip=row.p_slip,
-                    p_forget=row.p_forget,
-                )
-                node.param_source = source
-                node.total_attempts = row.total_attempts or 0
-                node.correct_count = row.correct_count or 0
-                node._dirty = False
-                self.nodes[row.concept] = node
+                    node = KnowledgeNode(
+                        name=row.concept,
+                        p_known=row.p_known,
+                        p_learn=row.p_learn,
+                        p_guess=row.p_guess,
+                        p_slip=row.p_slip,
+                        p_forget=row.p_forget,
+                    )
+                    node.param_source = source
+                    node.total_attempts = row.total_attempts or 0
+                    node.correct_count = row.correct_count or 0
+                    node._dirty = False
+                    self.nodes[row.concept] = node
 
-            if rows:
-                logger.info("BKT: 从 DB 加载 user_id=%d 的 %d 个知识点", self.user_id, len(rows))
+                if rows:
+                    logger.info("BKT: 从 DB 加载 user_id=%d 的 %d 个知识点", self.user_id, len(rows))
         except Exception as e:
             logger.warning("BKT: 加载历史状态失败: %s", e)
-        finally:
-            db.close()
 
     def persist_to_db(self):
         """将所有脏节点写入 MySQL"""
@@ -865,33 +871,29 @@ class BKTTracker:
         dirty_nodes = {name: nd for name, nd in self.nodes.items() if nd._dirty}
         if not dirty_nodes:
             return
-        db = SessionLocal()
         try:
-            for name, node in dirty_nodes.items():
-                row = db.query(BKTState).filter(
-                    BKTState.user_id == self.user_id,
-                    BKTState.concept == name,
-                ).first()
-                if not row:
-                    row = BKTState(user_id=self.user_id, concept=name)
-                    db.add(row)
-                row.p_known = node.p_known
-                row.total_attempts = node.total_attempts
-                row.correct_count = node.correct_count
-                row.level = node.level
-                row.is_mastered = node.is_mastered
-                row.p_learn = node._p_learn
-                row.p_guess = node._p_guess
-                row.p_slip = node._p_slip
-                row.p_forget = node._p_forget
-                node._dirty = False
-            db.commit()
-            logger.info("BKT: 持久化 %d 个知识点 user_id=%d", len(dirty_nodes), self.user_id)
+            with get_session() as db:
+                for name, node in dirty_nodes.items():
+                    row = db.query(BKTState).filter(
+                        BKTState.user_id == self.user_id,
+                        BKTState.concept == name,
+                    ).first()
+                    if not row:
+                        row = BKTState(user_id=self.user_id, concept=name)
+                        db.add(row)
+                    row.p_known = node.p_known
+                    row.total_attempts = node.total_attempts
+                    row.correct_count = node.correct_count
+                    row.level = node.level
+                    row.is_mastered = node.is_mastered
+                    row.p_learn = node._p_learn
+                    row.p_guess = node._p_guess
+                    row.p_slip = node._p_slip
+                    row.p_forget = node._p_forget
+                    node._dirty = False
+                logger.info("BKT: 持久化 %d 个知识点 user_id=%d", len(dirty_nodes), self.user_id)
         except Exception as e:
-            db.rollback()
             logger.error("BKT: 持久化失败: %s", e)
-        finally:
-            db.close()
 
     def get_or_create(self, concept: str, p_known: Optional[float] = None) -> KnowledgeNode:
         cleaned = normalize_concept_name(concept)
@@ -1033,14 +1035,27 @@ class BKTTracker:
         }
 
     def to_dict(self) -> dict:
+        # P1-#6 (2026-07-11): 区分"真实学习节点" vs "默认占位节点"
+        # 避免 quality_reviewer 把"占位节点"当成"已学但未掌握", 报 0/9 误判
+        real_nodes = {n: nd for n, nd in self.nodes.items() if nd.is_real}
+        real_scores = {n: nd.p_known for n, nd in real_nodes.items()}
+        real_attempts = sum(nd.total_attempts for nd in real_nodes.values())
+
         nodes_dict = {name: nd.to_dict() for name, nd in self.nodes.items()}
         scores = {name: nd.p_known for name, nd in self.nodes.items()}
+        total_attempts = sum(nd.total_attempts for nd in self.nodes.values())
         return {
             "nodes": nodes_dict,
             "summary": {
                 "total": len(self.nodes),
+                # P1-#6 新增: 真实学习节点统计 (供 quality_reviewer 区分)
+                "real_total": len(real_nodes),
+                "real_mastered": sum(1 for n in real_nodes.values() if n.is_mastered),
+                "real_attempts": real_attempts,
+                "has_real_data": len(real_nodes) > 0,
                 "mastered": len(self.get_mastered()),
                 "average": round(sum(scores.values()) / max(len(scores), 1), 4),
+                "total_attempts": total_attempts,
             },
             "metrics": self.get_prediction_metrics(),
         }
@@ -1078,8 +1093,8 @@ def sync_bkt_to_profile(user_id: int) -> bool:
     tracker = get_tracker(user_id)
     if not tracker.nodes:
         return False
-    db = SessionLocal()
-    try:
+    from app.core.database import get_session
+    with get_session() as db:
         from app.models.profile import LearningProfile
         row = db.query(LearningProfile).filter(LearningProfile.user_id == user_id).first()
         if not row:
@@ -1105,14 +1120,7 @@ def sync_bkt_to_profile(user_id: int) -> bool:
             row.knowledge_base = kb
             from sqlalchemy.orm.attributes import flag_modified
             flag_modified(row, "knowledge_base")
-            db.commit()
         return updated
-    except Exception as e:
-        db.rollback()
-        logger.error("BKT→Profile 同步失败: %s", e)
-        return False
-    finally:
-        db.close()
 
 
 def sync_profile_to_bkt(user_id: int, kb: dict):
@@ -1190,7 +1198,8 @@ def _load_kg_vocabulary() -> list[str]:
                             for kw in keywords:
                                 if kw and kw not in _kg_vocabulary and len(kw) >= 2:
                                     _kg_vocabulary.append(kw)
-        except Exception:
+        except Exception as e:
+            logger.warning("KG vocabulary loading failed: %s", e)
             _kg_vocabulary = []
     return _kg_vocabulary
 
@@ -1221,12 +1230,30 @@ def _extract_specific(text: str, base_name: str) -> str | None:
     return None
 
 
+# 答案格式模式：检测 "1A 2B 3C" / "1:A 2:B" / "A B C D" 等答题格式
+_ANSWER_FORMAT_RE = re.compile(
+    r'^(\d+[\s:：]*[A-Da-d][\s,，/、]*)+$'  # "1A 2B 3C"
+    r'|^[A-Da-d][\s,，/、]+[A-Da-d]'         # "A B C"
+    r'|^(\d+[\s:：]*[A-Da-d]\s*)+$'           # "1:A 2:B"
+)
+
+
+def _looks_like_answer_format(text: str) -> bool:
+    """检测文本是否看起来像答题格式而非概念名"""
+    if not text:
+        return False
+    return bool(_ANSWER_FORMAT_RE.match(text.strip()))
+
+
 def normalize_concept_name(raw: str) -> str:
     """规范化概念名称：匹配知识图谱词汇表，返回标准化名称"""
     if not raw or not isinstance(raw, str):
         return ""
     raw = raw.strip()
     if len(raw) < 2:
+        return ""
+    # 拒绝答案格式串 ("1A 2B 3C" 等)
+    if _looks_like_answer_format(raw):
         return ""
 
     vocab = _load_kg_vocabulary()

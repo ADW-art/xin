@@ -439,15 +439,15 @@ function goalLabel(v?: string) {
   return map[v||''] || v || ''
 }
 function typeLabel(t: string) {
-  const map: Record<string,string> = { document:'知识文档', mindmap:'思维导图', question_set:'练习题', code_example:'代码案例', video_script:'视频脚本' }
+  const map: Record<string,string> = { document:'知识文档', mindmap:'思维导图', question_set:'练习题', code_example:'代码案例', video_script:'视频脚本', reading_material:'拓展阅读', diagram:'图解说明', smart_tutoring:'智能辅导' }
   return map[t] || t
 }
 function typeIcon(t: string) {
-  const map: Record<string,string> = { document:'Document', mindmap:'DataBoard', question_set:'EditPen', code_example:'Monitor', video_script:'VideoPlay' }
+  const map: Record<string,string> = { document:'Document', mindmap:'DataBoard', question_set:'EditPen', code_example:'Monitor', video_script:'VideoPlay', reading_material:'Reading', diagram:'PictureFilled', smart_tutoring:'StarFilled' }
   return map[t] || 'Document'
 }
 function typeColor(t: string) {
-  const map: Record<string,string> = { document:'#2563EB', mindmap:'#10B981', question_set:'#F59E0B', code_example:'#8B5CF6', video_script:'#3B82F6' }
+  const map: Record<string,string> = { document:'#2563EB', mindmap:'#10B981', question_set:'#F59E0B', code_example:'#8B5CF6', video_script:'#3B82F6', reading_material:'#06B6D4', diagram:'#8B5CF6', smart_tutoring:'#2563EB' }
   return map[t] || '#3B82F6'
 }
 function timeAgo(dateStr: string) {
@@ -473,7 +473,7 @@ async function loadAll() {
       api.get('/auth/me'),
       api.get('/profile/me'),
       api.get('/resources?size=5'),
-      api.get('/admin/stats'),
+      api.get('/admin/stats').catch(() => ({ data: null })),
       api.get('/bkt/status').catch(() => ({ data: null })),
     ])
 

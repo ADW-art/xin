@@ -36,6 +36,7 @@ STALE_ONE_SHOT_FLAGS: frozenset[str] = frozenset({
     "teaching_continue",            # 用户说"继续"触发下一节点
     "replan_path",                  # 路径动态重规划信号
     "teach_target_index",           # 指定教学节点索引
+    "_explicit_teach",              # P2-1 (2026-07-12): supervisor 显式教学授权标志
 
     # === 意图/路由 ===
     "_new_intent_handled",          # 标记新意图已处理 (避免教学流劫持)

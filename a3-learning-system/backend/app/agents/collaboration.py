@@ -12,26 +12,11 @@
   3. 路径协同:   Path Agent(规划) ∥ Resource Agent(预生成首节点)
 """
 
-import json
 import logging
 
 from app.agents.state import AgentState
-from app.agents.question_agent import question_agent_node, is_answer_submission
-from app.agents.evaluation_agent import evaluation_agent_node
-from app.agents.resource_agent import resource_agent_node
-from app.agents.path_agent import path_agent_node
 from app.agents._msg_compat import last_msg_content  # 兼容 checkpoint 恢复后 dict 格式
-from app.services.spark_client import SparkClient
-
 logger = logging.getLogger(__name__)
-def _safe_run(node_fn, state, spark, node_name: str) -> tuple[str, dict | None, str | None]:
-    """安全执行 Agent 节点，返回 (name, result_dict, error_string)"""
-    try:
-        result = node_fn(state, spark)
-        return (node_name, result, None)
-    except Exception as e:
-        logger.warning("协同节点 '%s' 执行失败: %s", node_name, e)
-        return (node_name, None, str(e))
 
 
 def _build_qa_review(q_outputs: dict, e_outputs: dict) -> dict:
@@ -45,8 +30,10 @@ def _build_qa_review(q_outputs: dict, e_outputs: dict) -> dict:
         weak_names = [k for k, _ in weak[:3]]
         notes.append(f"建议题目侧重薄弱维度: {', '.join(weak_names)}")
 
-    # BKT 难度匹配检查
+    # BKT 难度匹配检查（防御: key 存在但值为 None 时兜底）
     bkt_p = q_outputs.get("bkt_p_known", 0.5)
+    if bkt_p is None:
+        bkt_p = 0.5
     if bkt_p > 0.8:
         notes.append(f"BKT P={bkt_p:.0%}(精通)，应出挑战题/综合题")
     elif bkt_p < 0.35:
@@ -58,10 +45,10 @@ def _build_qa_review(q_outputs: dict, e_outputs: dict) -> dict:
         notes.append(f"建议混合选择题+填空题+代码题，覆盖'{topic}'的不同层次")
 
     score = max(0, 100 - len(notes) * 8)
-    return {"score": score, "notes": notes, "bkt_level": round(bkt_p, 2)}
+    return {"score": score, "notes": notes, "bkt_level": round(bkt_p or 0.5, 2)}
 
 
-def _quality_review_node(state: dict, spark: SparkClient) -> dict:
+def _quality_review_node(state: dict) -> dict:
     """质量审查 Agent — 检查 Resource Agent 输出质量
 
     与 Resource Agent 并行运行，审查维度:
@@ -69,6 +56,7 @@ def _quality_review_node(state: dict, spark: SparkClient) -> dict:
       2. 认知风格适配
       3. 内容完整性预估
     """
+    state = AgentState.model_validate(state)
     s = dict(state)
     profile = s.get("user_profile") or {}
     teaching_ctx = s.get("teaching_context") or {}
@@ -79,20 +67,30 @@ def _quality_review_node(state: dict, spark: SparkClient) -> dict:
     tracker = get_tracker(s.get("user_id", 0))
     bkt_data = tracker.to_dict()
     summary = bkt_data.get("summary", {})
-    mastered = summary.get("mastered", 0)
-    total = summary.get("total", 0)
+    mastered = summary.get("real_mastered", summary.get("mastered", 0))  # P1-#6: 优先用 real_mastered
+    # P1-#6 (2026-07-11): 用 real_total 替代 total 判断, 避免占位节点误判
+    total = summary.get("real_total", summary.get("total", 0))
+    total_attempts = summary.get("real_attempts", summary.get("total_attempts", 0))
     avg_mastery = mastered / max(total, 1)
 
     issues = []
     level = "适中"
+    # P1-#6 (2026-07-11): 有意义的 BKT 至少 1 个真实概念 + 有答题记录
+    has_meaningful_bkt = total >= 1 and total_attempts > 0
 
-    # 难度匹配
-    if avg_mastery > 0.8 and total >= 3:
-        issues.append(f"学生已掌握{mastered}/{total}概念，内容应偏向进阶/综合应用")
-        level = "应偏难"
-    elif avg_mastery < 0.3 and total >= 1:
-        issues.append(f"学生仅掌握{mastered}/{total}概念，内容应注重基础讲解")
-        level = "应偏易"
+    # 难度匹配（仅当有足够的BKT数据时才有参考价值）
+    if has_meaningful_bkt:
+        if avg_mastery > 0.8:
+            issues.append(f"学生已掌握{mastered}/{total}个真实学习概念，内容应偏向进阶/综合应用")
+            level = "应偏难"
+        elif avg_mastery < 0.3:
+            issues.append(f"学生仅掌握{mastered}/{total}个真实学习概念，内容应注重基础讲解")
+            level = "应偏易"
+    elif total == 0:
+        # P1-#6: 新用户/未学习用户, 明确说"无学习数据", 而不是 0/9
+        issues.append("暂无BKT学习数据（用户尚未开始学习），按默认难度生成基础概念内容")
+    else:
+        issues.append(f"BKT数据不足（仅{total}个真实概念有记录），按默认难度生成")
 
     # 认知风格适配
     style = str(profile.get("cognitive_style", "")).lower()
@@ -106,21 +104,33 @@ def _quality_review_node(state: dict, spark: SparkClient) -> dict:
     if hint:
         issues.append(f"[{style}型学习者] {hint}")
 
-    # 结构完整性检查点（提示 Resource Agent 的强制清单）
-    issues.append("应包含: 概念解释 → 代码示例 → 常见误区 → 练习题")
+    # 结构完整性检查 — 检查 resource_agent 的元数据 (P1-FIX: stream_buffer 在流式模式下始终为空,
+    # 因为 resource_agent 返回 stream_pending(messages), 实际内容由 chat.py 后续生成)
+    _struct_issues = []
+    _ao_inner = s.get("agent_outputs", {}) or {}
+    _res_meta = _ao_inner.get("resource_agent", {}) or {}
+    _has_stream_pending = bool(_res_meta.get("stream_pending"))
+    _res_topic = _res_meta.get("topic", "")
+    _res_title = _res_meta.get("title", "")
+    if not _has_stream_pending and not _res_topic:
+        _struct_issues.append("resource_agent 未生成有效请求, 可能提示词构建失败")
+    elif not _res_title:
+        _struct_issues.append("资源标题缺失, 建议检查话题提取逻辑")
 
-    weak_penalty = sum(20 for i in issues if "薄弱" in i or "难度" in i)
-    struct_penalty = sum(15 for i in issues if "结构" in i or "包含" in i)
-    misc_penalty = sum(10 for i in issues if not i.startswith("[") and not any(k in i for k in ["薄弱","难度","结构","包含"]))
-    score = max(40, 100 - weak_penalty - struct_penalty - misc_penalty)
-    score = min(score, 100)
+    weak_penalty = sum(20 for i in issues if ("薄弱" in i or "难度" in i) and has_meaningful_bkt)
+    # P0-#3 2026-07-11: 移除"应包含"形式化扣分 (struct_penalty)
+    struct_penalty = 0
+    # 仅排除纯信息性消息（以"["开头的风格提示），难度/结构类问题仍参与扣分
+    misc_penalty = sum(10 for i in issues if not i.startswith("["))
+    # 从基线分扣减，上限 100（P0-#4 2026-07-11 修复: max→min 使评分可低于基线）
+    base_score = 85 if not has_meaningful_bkt else 60
+    score = min(100, base_score - weak_penalty - struct_penalty - misc_penalty)
+    score = max(score, 20)
 
     qc_text = "评分 " + str(score) + "/100"
     if issues:
         qc_text += "\n建议:\n" + "\n".join(issues[:5])
     return {
-        "current_agent": "quality_reviewer",
-        "stream_buffer": qc_text,
         "agent_outputs": {
             **s.get("agent_outputs", {}),
             "quality_reviewer": {
@@ -133,3 +143,103 @@ def _quality_review_node(state: dict, spark: SparkClient) -> dict:
         },
     }
 
+# ═══════════════════════════════════════════════════════════
+# 并行协同 Join 节点 — 从 supervisor.py 提取，保持单一职责
+# ═══════════════════════════════════════════════════════════
+
+NL = "\n"
+
+
+def qa_join_node(state):
+    """QA 并行协同合并: question_agent + evaluation_agent
+
+    P0-DEDUP (2026-07-12): 若 question_agent 已通过 stream_pending 流式输出，
+    不再重复 yield stream_buffer。
+    """
+    state = AgentState.model_validate(state)
+    s = dict(state)
+    ao = s.get("agent_outputs") or {}
+    q = ao.get("question_agent") or {}
+    e = ao.get("evaluation_agent") or {}
+    merged = {**ao, "_collaboration_mode": "qa_parallel"}
+    if q.get("stream_pending"):
+        buf = ""
+    else:
+        buf = q.get("stream_buffer", "") or ""
+    ebuf = e.get("stream_buffer", "") or ""
+    if ebuf:
+        buf += NL + NL + "> **评估反馈**" + NL + "> " + ebuf.replace(NL, NL + "> ")
+    return {"agent_outputs": merged, "stream_buffer": buf, "current_agent": "qa_join", "next_agent": "supervisor"}
+
+
+def rc_join_node(state):
+    """资源协同合并: resource_agent 输出 + 串行质量审查
+
+    质量审查(_quality_review_node)从并行改为串行后处理:
+    - 优点: 可以检查 resource_agent 的实际输出内容
+    - 质量反馈写入 agent_outputs.quality_reviewer, 供 supervisor 质量门使用
+    """
+    state = AgentState.model_validate(state)
+    s = dict(state)
+    ao = s.get("agent_outputs") or {}
+    r = ao.get("resource_agent") or {}
+
+    # 串行质量审查 — 现在可以检查 resource_agent 的实际输出文本
+    # P1-3 (2026-07-12): 质量审查包裹 try/except，防止异常导致 rc_join 崩溃
+    try:
+        qc_result = _quality_review_node(s)
+    except Exception as _qc_err:
+        logger.warning("rc_join: 质量审查失败 (non-fatal): %s", _qc_err)
+        qc_result = {"agent_outputs": {}}
+    qc = qc_result.get("agent_outputs", {}).get("quality_reviewer", {})
+
+    merged = {**ao, **qc_result.get("agent_outputs", {}), "_collaboration_mode": "resource_serial_qc"}
+    # P0 (2026-07-12): 质量审查结果只写入 agent_outputs 供 supervisor 内部使用，
+    # 不再追加到 stream_buffer 泄露给用户
+    buf = r.get("stream_buffer", "") or ""
+    return {"agent_outputs": merged, "stream_buffer": buf, "current_agent": "rc_join", "next_agent": "supervisor"}
+
+
+
+def path_join_node(state):
+    """路径并行协同合并: path_agent + prefetch_agent
+
+    P0-DEDUP (2026-07-12): path_agent 通过 stream_pending 流式输出时，
+    path_join 不应再次 yield 同样的 stream_buffer，避免前端重复显示。
+    """
+    state = AgentState.model_validate(state)
+    s = dict(state)
+    ao = s.get("agent_outputs") or {}
+    p = ao.get("path_agent") or {}
+    pr = ao.get("prefetch_agent") or {}
+    merged = {**ao, "_collaboration_mode": "path_parallel"}
+    # P0-DEDUP: 若 path_agent 已通过 stream_pending 流式输出，跳过 stream_buffer
+    # 避免同一内容被 yield 两次 (一次流式 + 一次 buffer)
+    if p.get("stream_pending"):
+        buf = ""
+    else:
+        buf = p.get("stream_buffer", "") or ""
+    pf_buf = pr.get("stream_buffer", "") or ""
+    # 只在教学模式合并 prefetch 资源（避免与后续 resource_agent 的推荐重复）
+    tc = p.get("teaching_context") or {}
+    if pf_buf and tc.get("mode") == "teaching":
+        buf += NL + NL + "> **预生成资源**" + NL + "> "
+        buf += pf_buf[:300].replace(NL, NL + "> ")
+    elif pf_buf:
+        logger.info("path_join: 非教学模式，跳过 prefetch 资源合并（由 resource_agent 处理）")
+    tc = p.get("teaching_context")
+    r = {"agent_outputs": merged, "stream_buffer": buf, "current_agent": "path_join", "next_agent": "supervisor"}
+    if tc:
+        r["teaching_context"] = tc
+    return r
+
+
+def _prefetch_resource_meta(state: dict) -> dict:
+    """轻量资源预取: 简化为空 stub，避免 RAG 检索开销"""
+    return {
+        "current_agent": "prefetch_agent",
+        "agent_outputs": {
+            "prefetch_agent": {"topic": "", "stream_buffer": ""},
+        },
+        "stream_buffer": "",
+    }

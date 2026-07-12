@@ -11,6 +11,7 @@
   main.py                     ← app.include_router(resources_router)
 """
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -92,3 +93,43 @@ def delete_resource(
     db.delete(r)
     db.commit()
     return DeleteResponse(deleted=True)
+
+
+@router.get("/{resource_id}/export/notebook")
+def export_notebook(
+    resource_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """导出 Notebook 资源为 .ipynb 文件"""
+    r = db.query(Resource).filter(Resource.id == resource_id, Resource.user_id == current_user.id).first()
+    if not r:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="资源不存在")
+    if r.resource_type != "notebook":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="此资源不是 Notebook 类型")
+    from app.services.notebook_service import content_to_notebook_bytes
+    ipynb_bytes = content_to_notebook_bytes(r.content or "", r.title or "Notebook")
+    filename = (r.title or "notebook").replace(" ", "_") + ".ipynb"
+    return Response(
+        content=ipynb_bytes,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/{resource_id}/audio")
+async def stream_audio(
+    resource_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """流式返回 TTS 语音讲解 MP3"""
+    r = db.query(Resource).filter(Resource.id == resource_id, Resource.user_id == current_user.id).first()
+    if not r:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="资源不存在")
+    if r.resource_type != "audio_lecture":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="此资源不是音频类型")
+    from app.services.edge_tts_service import text_to_speech_bytes
+    content = r.content or ""
+    mp3_bytes = await text_to_speech_bytes(content)
+    return Response(content=mp3_bytes, media_type="audio/mpeg")

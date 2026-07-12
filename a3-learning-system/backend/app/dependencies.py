@@ -5,36 +5,32 @@ FastAPI 依赖注入
 """
 
 from app.config import settings
-from app.services.spark_client import SparkClient
+from app.services.deepseek_client import DeepSeekClient
 
 # ============================================================
-# SparkClient 全局单例---防止重复创建对象-防止重复书写代码
+# LLM 客户端全局单例 (当前: DeepSeek，Spark 代码保留备用)
 # ============================================================
 
-_spark_client: SparkClient | None = None #私有的全局变量声明
+_llm_client: DeepSeekClient | None = None
 
-def get_spark_client() -> SparkClient:
-    """返回 SparkClient 的全局唯一实例（单例模式）
+def get_spark_client() -> DeepSeekClient:
+    """返回 LLM 客户端的全局唯一实例（单例模式）
 
-    为什么用单例：
-      SparkClient 内部只存三个字符串（app_id/api_key/api_secret），
-      没有可变状态。一个实例全局复用，避免每次请求都创建新对象。
+    当前使用 DeepSeek，接口兼容原 SparkClient。
+    切换回 Spark: 修改此函数创建 SparkClient 即可。
 
     使用方式：
       @app.get("/chat")
-      async def chat(spark: SparkClient = Depends(get_spark_client)):
+      async def chat(spark = Depends(get_spark_client)):
           spark.chat_stream(...)
     """
-    global _spark_client #赋值外部变量声明-直接用外面那个声明好的
-    if _spark_client is None: #如果没有创建过
-        _spark_client = SparkClient(
-            app_id=settings.spark_app_id,
-            api_key=settings.spark_api_key,
-            api_secret=settings.spark_api_secret,
-            app_password=settings.spark_app_password,
-            model=settings.spark_model,
+    global _llm_client
+    if _llm_client is None:
+        _llm_client = DeepSeekClient(
+            api_key=settings.deepseek_api_key,
+            model=settings.deepseek_model,
         )
-    return _spark_client
+    return _llm_client
 
 
 # ============================================================

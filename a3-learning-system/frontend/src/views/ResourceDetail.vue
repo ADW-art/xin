@@ -120,6 +120,28 @@ ResourceDetail 资源详情页
           <pre class="code-block"><code>{{ resource.content }}</code></pre>
         </div>
 
+        <!-- notebook → NotebookDownload 组件 -->
+        <NotebookDownload
+          v-else-if="resource.resource_type === 'notebook'"
+          :content="resource.content || ''"
+          :title="resource.title"
+          :resourceId="resource.id"
+        />
+
+        <!-- audio_lecture → AudioPlayer 组件 -->
+        <AudioPlayer
+          v-else-if="resource.resource_type === 'audio_lecture'"
+          :content="resource.content || ''"
+          :resourceId="resource.id"
+        />
+
+        <!-- visual_diagram → VisualDiagram 组件 -->
+        <VisualDiagram
+          v-else-if="resource.resource_type === 'visual_diagram'"
+          :content="resource.content || ''"
+          :resourceId="resource.id"
+        />
+
         <!-- 未知类型兜底 -->
         <div v-else class="markdown-body" v-html="renderedMarkdown"/>
       </div>
@@ -161,9 +183,12 @@ import { useRoute } from 'vue-router'
 import { marked } from 'marked'
 import { ElMessage } from 'element-plus'
 import DOMPurify from 'dompurify'
-import { ArrowLeft, Loading, Document, Connection, DocumentCopy, EditPen, VideoCamera, VideoPlay, Cpu, Clock, CollectionTag, Star, StarFilled } from '@element-plus/icons-vue'
+import { ArrowLeft, Loading, Document, Connection, DocumentCopy, EditPen, VideoCamera, VideoPlay, Cpu, Clock, CollectionTag, Star, StarFilled, Reading, PictureFilled, Notebook, Headset } from '@element-plus/icons-vue'
 import MindMap from '@/components/resource/MindMap.vue'
 import SlidePlayer from '@/components/resource/SlidePlayer.vue'
+import NotebookDownload from '@/components/resource/NotebookDownload.vue'
+import AudioPlayer from '@/components/resource/AudioPlayer.vue'
+import VisualDiagram from '@/components/resource/VisualDiagram.vue'
 import { getResource, submitFeedback, type ResourceDetail as ResourceDetailType } from '@/api/resource'
 
 const route = useRoute()
@@ -187,6 +212,13 @@ const typeMap: Record<string, { label: string; icon: Component; bg: string; colo
   code_example: { label: '代码示例', icon: DocumentCopy, bg: 'rgba(99,102,241,.12)', color: '#6366F1', border: 'rgba(99,102,241,.25)' },
   question_set: { label: '练习题集', icon: EditPen,     bg: 'rgba(14,165,233,.12)', color: '#0EA5E9', border: 'rgba(14,165,233,.25)' },
   video_script: { label: '视频脚本', icon: VideoCamera,  bg: 'rgba(96,165,250,.15)', color: '#60A5FA', border: 'rgba(96,165,250,.30)' },
+  reading_material: { label: '拓展阅读', icon: Reading,  bg: 'rgba(6,182,212,.12)', color: '#06B6D4', border: 'rgba(6,182,212,.25)' },
+  diagram:     { label: '图解说明', icon: PictureFilled, bg: 'rgba(139,92,246,.12)', color: '#8B5CF6', border: 'rgba(139,92,246,.25)' },
+  smart_tutoring: { label: '智能辅导', icon: StarFilled, bg: 'rgba(37,99,235,.12)', color: '#2563EB', border: 'rgba(37,99,235,.25)' },
+  notebook:       { label: 'Notebook', icon: Notebook,     bg: 'rgba(245,158,11,.12)', color: '#F59E0B', border: 'rgba(245,158,11,.25)' },
+  audio_lecture:  { label: '语音讲解', icon: Headset,      bg: 'rgba(16,185,129,.12)', color: '#10B981', border: 'rgba(16,185,129,.25)' },
+  video_animation:{ label: 'AI 视频', icon: VideoCamera,   bg: 'rgba(139,92,246,.12)', color: '#8B5CF6', border: 'rgba(139,92,246,.25)' },
+  visual_diagram:{ label: '知识图解', icon: PictureFilled, bg: 'rgba(6,182,212,.12)', color: '#06B6D4', border: 'rgba(6,182,212,.25)' },
 }
 
 // ─� 计算属性 ──
@@ -196,7 +228,7 @@ const typeInfo = computed(() => {
 
 const isMarkdownType = computed(() => {
   const t = resource.value?.resource_type
-  return t === 'document' || t === 'question_set' || t === 'video_script'
+  return t === 'document' || t === 'question_set' || t === 'video_script' || t === 'reading_material' || t === 'diagram' || t === 'smart_tutoring'
 })
 
 // 仅文档和视频脚本资源支持视频讲解幻灯片

@@ -10,6 +10,7 @@ MindMap 思维导图组件 v2
     <!-- 工具栏 -->
     <div class="mm-toolbar" v-if="hasContent">
       <span class="mm-node-count">{{ nodeCount }} nodes</span>
+      <el-button text size="small" @click="exportPng">导出PNG</el-button>
       <el-button text size="small" @click="toggleFullscreen">
         {{ isFullscreen ? '退出' : '全屏' }}
       </el-button>
@@ -119,6 +120,7 @@ MindMap 思维导图组件 v2
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { marked, type Token } from 'marked'
+import { svgElementToPngDownload } from '@/utils/export'
 
 const props = withDefaults(defineProps<{
   content: string
@@ -368,6 +370,13 @@ function toggleFullscreen() {
 
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape' && isFullscreen.value) toggleFullscreen()
+}
+
+function exportPng() {
+  const svg = svgContainer.value?.querySelector('svg')
+  if (!svg) return
+  const title = parsedRoot.value?.label || 'mindmap'
+  svgElementToPngDownload(svg, `${title}.png`)
 }
 
 onMounted(() => document.addEventListener('keydown', onKeydown))

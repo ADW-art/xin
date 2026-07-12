@@ -9,7 +9,8 @@ import uuid
 import logging
 import asyncio
 import re
-import time  # P1-A 2026-07-11
+import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Depends, Header
@@ -38,7 +39,124 @@ _SENTINEL = object()
 
 # Shared thread pool for bridging sync LLM calls to async event stream.
 # Avoids creating a new executor thread per SSE request (Issue #3).
-_bridge_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="bridge_")
+_bridge_executor = ThreadPoolExecutor(max_workers=min(32, (os.cpu_count() or 1) * 4 + 1), thread_name_prefix="bridge_")
+
+
+# ============================================================
+# P0-#1 (2026-07-11): 同请求去重 + P0-#2 (2026-07-11): Spark token 清理
+# 省一标准: 防御性编程, 杜绝重复生成 / 内部 token 泄露
+# ============================================================
+import hashlib as _hashlib
+
+_CONTENT_DEDUP_CACHE: dict[str, tuple[str, float]] = {}
+_DEDUP_WINDOW_SEC = 5.0  # 5s 窗口内同前缀 chunk 视为重复
+_DEDUP_MAX_CACHE = 256   # 防止内存泄漏
+
+
+def _is_duplicate_chunk(user_msg: str, content_chunk: str) -> bool:
+    """P0-#1 省一验收: 同请求 5s 窗口内同前缀内容视为重复.
+
+    优化: 只检测"长内容重复" (>=50 字符), 避免短 chunk (Spark 默认 chunk_size=2) 误判
+    P1-FIX: 每次插入时清理过期条目, 防止低流量时缓存永不过期.
+    Returns:
+        True  - 该 chunk 是重复的, 调用方应 skip yield
+        False - 正常 chunk, 调用方应继续
+    """
+    if not content_chunk or len(content_chunk) < 50:
+        return False
+    key = _hashlib.md5(
+        f"{user_msg[:80]}:{content_chunk[:80]}".encode("utf-8")
+    ).hexdigest()
+    now = time.time()
+    # 每次插入时清理过期条目 (P1-FIX: 独立于容量检查, 低流量也定期清理)
+    cutoff = now - _DEDUP_WINDOW_SEC * 2
+    for k in list(_CONTENT_DEDUP_CACHE.keys()):
+        if _CONTENT_DEDUP_CACHE[k][1] < cutoff:
+            _CONTENT_DEDUP_CACHE.pop(k, None)
+    # 容量保护: 超出上限时强制清理
+    if len(_CONTENT_DEDUP_CACHE) > _DEDUP_MAX_CACHE:
+        stale = sorted(_CONTENT_DEDUP_CACHE.items(), key=lambda x: x[1][1])
+        for k, _ in stale[:len(_CONTENT_DEDUP_CACHE) - _DEDUP_MAX_CACHE + 10]:
+            _CONTENT_DEDUP_CACHE.pop(k, None)
+    if key in _CONTENT_DEDUP_CACHE:
+        cached, ts = _CONTENT_DEDUP_CACHE[key]
+        if now - ts < _DEDUP_WINDOW_SEC:
+            logger.warning("P0-#1 同请求去重触发: 5s 内重复 chunk (%d chars)", len(content_chunk))
+            return True
+    _CONTENT_DEDUP_CACHE[key] = (content_chunk, now)
+    return False
+
+
+# P0-#2 省一验收: Spark LLM 内部 highlight token 清理
+# Spark API 返回的代码块常带 "sk"> (keyword) "sf"> (function) "sc"> (comment) 等
+# 这些是 LLM 内部样式标记, 前端若直接展示会变成 "sk">def 这种不可读代码
+_SPARK_TOKEN_RE = re.compile(r'"[sS][a-z0-9]{1,2}">')
+
+
+def clean_spark_tokens(text: str) -> str:
+    """P0-#2 省一验收: 清理 Spark LLM 内部高亮 token, 保留纯代码.
+
+    输入: '"sk">def "sf">func():\\n    "sc"># comment'
+    输出: 'def func():\\n    # comment'
+    """
+    if not text:
+        return text
+    cleaned = _SPARK_TOKEN_RE.sub("", text)
+    # 额外清理: Spark 有时输出 \n 字符串字面量 (双重转义)
+    cleaned = cleaned.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
+    if len(cleaned) != len(text):
+        logger.debug("P0-#2 Spark token 清理: 移除 %d 字符", len(text) - len(cleaned))
+    return cleaned
+
+
+# P1-#5 省一验收: 流式内容完整性校验
+class _StreamIntegrityChecker:
+    """检测流式内容是否完整 (无截断/无重复/无错乱).
+
+    设计: 只检测"极短内容重复" (Spark chunk_size=2 时常见), 避免 LLM 长重复
+          文本被误判 (md5 8位有碰撞可能)
+    """
+
+    def __init__(self):
+        self._last_short_hash: str | None = None
+        self._last_short_content: str = ""
+        self._total_chunks: int = 0
+        self._dup_count: int = 0
+
+    def check(self, chunk: str) -> tuple[bool, str]:
+        """检查单 chunk 完整性.
+
+        Returns:
+            (True, 'OK')        - 正常
+            (False, 'duplicate') - 重复短块 (Spark 偶发, 可丢弃)
+        """
+        if not chunk:
+            return True, "empty"
+        self._total_chunks += 1
+        # P1-#5 2026-07-11: 改用"短内容连续重复"判断 (避免误判)
+        # 短 chunk (≤4字符) 连续 2 次相同才视为重复
+        # 排除仅含 Markdown 表格字符的 chunk (--, |, |- 等)
+        stripped = chunk.strip()
+        if len(chunk) <= 4 and not all(c in '-|: \t\n' for c in stripped):
+            h = _hashlib.md5(chunk.encode("utf-8")).hexdigest()[:8]
+            if h == self._last_short_hash and chunk == self._last_short_content:
+                self._dup_count += 1
+                if self._dup_count >= 2:  # 至少连续 2 次才丢
+                    return False, "duplicate"
+            else:
+                self._dup_count = 0
+            self._last_short_hash = h
+            self._last_short_content = chunk
+        return True, "OK"
+
+    @property
+    def is_clean(self) -> bool:
+        return self._dup_count == 0
+
+
+# 模块级单例: 每个 SSE 请求实例化一个
+def _new_integrity_checker():
+    return _StreamIntegrityChecker()
 
 
 # ============================================================
@@ -353,7 +471,15 @@ async def _bridge_stream(spark, messages: list, temperature: float, max_tokens: 
     # chunk_size > 0 enables character-level typewriter effect
     accumulated = ""
     while True:
-        item = await queue.get()
+        try:
+            item = await asyncio.wait_for(queue.get(), timeout=300)
+        except asyncio.TimeoutError:
+            logger.error("SSE stream timeout after 300s")
+            if accumulated:
+                yield accumulated
+            # P0-FIX (2026-07-12): 不再 yield SSE 格式字符串,
+            # 改为 raise 异常让调用方统一处理为 v1.error 事件
+            raise TimeoutError("SSE stream timeout after 300s")
         if item is _SENTINEL:
             if accumulated:
                 yield accumulated
@@ -364,6 +490,9 @@ async def _bridge_stream(spark, messages: list, temperature: float, max_tokens: 
             raise item
 
         if chunk_size > 0:
+            # P0-#2 (2026-07-11): 在切分为显示块之前，先对原始 LLM 输出清洗 Spark token
+            # 必须在 chunk_size 切分之前调用，因为 "sc"> (5字符) 会被 chunk_size=2 切碎
+            item = clean_spark_tokens(item)
             accumulated += item
             while len(accumulated) >= chunk_size:
                 yield accumulated[:chunk_size]
@@ -405,7 +534,8 @@ async def chat_send(
     else:
         user_msg = HumanMessage(content=request.content)
 
-    config = {"configurable": {"thread_id": f"user-{user_id}"}, "recursion_limit": 100}
+    from app.config import AGENT_RECURSION_LIMIT
+    config = {"configurable": {"thread_id": f"user-{user_id}"}, "recursion_limit": AGENT_RECURSION_LIMIT}
 
     # 从 checkpoint 恢复 teaching_context（跨轮次持久化）
     prev_teaching_ctx = None
@@ -453,13 +583,15 @@ async def chat_send(
                      _lpa, _lpa + 1, _pac, _pfd)
 
     initial_state = {
-        "messages": history_msgs + [user_msg],
+        # P0-FIX (2026-07-12): 只传新用户消息, 历史由 LangGraph checkpoint add_messages 合并
+        # 修复: history_msgs 从 DB 重建的新对象 ID 与 checkpoint 不同, add_messages 会重复追加
+        "messages": [user_msg],
         "current_agent": "supervisor",
         "next_agent": None,
         "user_profile": _load_profile(user_id),
         # P1-1: 合并 topic_context + 恢复的画像冷却位点
         "context": {**{"topic_context": topic_ctx}, **_restored_context},
-        "agent_outputs": {},
+        "agent_outputs": {"_CLEAR_": True},  # P0-2: _CLEAR_ sentinel 清除 checkpoint 累积的 agent_outputs
         "stream_buffer": "",
         "user_id": user_id,
         "teaching_context": prev_teaching_ctx,
@@ -469,10 +601,10 @@ async def chat_send(
     _user_msg_id = 0
     if user_id and not request.regenerate:
         with get_session() as db:
-            _user_msg = Conversation(user_id=user_id, role="user", content=request.content)
-            db.add(_user_msg)
+            _conv_user_msg = Conversation(user_id=user_id, role="user", content=request.content)
+            db.add(_conv_user_msg)
             db.flush()
-            _user_msg_id = _user_msg.id
+            _user_msg_id = _conv_user_msg.id
 
     async def event_stream():
         prev_agent = "supervisor"
@@ -480,17 +612,24 @@ async def chat_send(
         assistant_agent = ""
         _captured_outputs = {}
         _agent_switch_count = 0
+        _pending_resource_meta = None  # C7: 延迟到 LLM 完成后创建 Resource
+        # P0-#1/P1-#5 (2026-07-11): 同请求去重 + 流式完整性校验
+        _user_msg = request.content
+        _integrity = _new_integrity_checker()
 
         try:
-            # P1-A 2026-07-11: astream 整体超时 90s, 防止 RAG/LLM 复合阻塞
-            _AAGENT_TIMEOUT = 90
+            # P0 (2026-07-12): astream 整体超时 300s (5min)，必须 >= 内层 _stream_timeout (120s)
+            # 修复前为 90s < 120s，导致超时消息注入正常内容中间
+            _AAGENT_TIMEOUT = 300
             _astream_start = time.time()
+            _force_stop = False  # P0-FIX: 内层 break 无法终止外层 async for
             async for update in graph.astream(initial_state, config, stream_mode="updates"):
-                if time.time() - _astream_start > _AAGENT_TIMEOUT:
+                if _force_stop or time.time() - _astream_start > _AAGENT_TIMEOUT:
                     logger.warning("SSE: astream 整体超过 %ds, 强制结束", _AAGENT_TIMEOUT)
                     error_msg = "\n\n（响应超时，请稍后重试或简化问题）"
                     assistant_content += error_msg
                     yield f"event: v1.message\ndata: {json.dumps({'content': error_msg, 'agent': 'system', 'type': 'timeout'}, ensure_ascii=False)}\n\n"
+                    _force_stop = True  # P0 (2026-07-12): 设置标志防止后续 Mermaid/小结 yield
                     break
                 for node_name, node_update in update.items():
                     if node_name == "__end__":
@@ -505,6 +644,7 @@ async def chat_send(
                             error_msg = "\n\n（检测到异常循环，已自动终止，请刷新页面重试）"
                             assistant_content += error_msg
                             yield f"event: v1.message\ndata: {json.dumps({'content': error_msg, 'agent': 'system', 'type': 'loop_guard'}, ensure_ascii=False)}\n\n"
+                            _force_stop = True
                             break
                         yield f"event: v1.agent_switch\ndata: {json.dumps({'from': prev_agent, 'to': agent_name}, ensure_ascii=False)}\n\n"
                         prev_agent = agent_name
@@ -529,34 +669,26 @@ async def chat_send(
 
                     _resource_meta = agent_output.get(agent_name, {})
                     if _resource_meta and "type" in _resource_meta and agent_name == "resource_agent":
-                        _r_type = _resource_meta.get("type", "document")
-                        _r_title = _resource_meta.get("title") or _resource_meta.get("topic", "学习资源")
-                        # 在 SSE 流内保存占位资源到 DB，获取真实 resource_id
-                        _r_id = 0
-                        try:
-                            from app.models.resource import Resource as RModel
-                            from app.core.database import SessionLocal
-                            _rdb = SessionLocal()
-                            try:
-                                _rr = RModel(user_id=user_id, resource_type=_r_type,
-                                             title=_r_title, content="", generated_by="resource_agent")
-                                _rdb.add(_rr)
-                                _rdb.flush()
-                                _r_id = _rr.id
-                                _resource_meta["db_id"] = _r_id
-                                logger.info("SSE: 资源占位已创建 id=%d type=%s", _r_id, _r_type)
-                            finally:
-                                _rdb.close()
-                        except Exception as _re:
-                            logger.warning("SSE: 资源占位创建失败: %s", _re)
-                        # 发射 resource_ready（携带真实 resource_id，可立即使用）
-                        yield f"event: v1.resource_ready\ndata: {json.dumps({'type': 'resource_ready', 'resource_id': _r_id, 'resource_type': _r_type, 'title': _r_title}, ensure_ascii=False)}\n\n"
+                        # 延迟创建: Resource 不再在此处创建占位记录(避免LLM失败导致孤儿记录)
+                        # 实际 Resource 在流式完成后由 _persist_agent_output 一次性创建
+                        _pending_resource_meta = _resource_meta
 
                     pending = agent_output.get(agent_name, {}).get("stream_pending")
+                    # DIAG-FIX 2026-07-11: 用 node_update 替代 state (event_stream 内无 state 变量)
+                    # P0-FIX 2026-07-11: 删除 print 调试, 改用 logger.info (已存在)
+                    _tc_check = node_update.get("teaching_context") if isinstance(node_update, dict) else None
+                    logger.info(
+                        "[CHAT-DIAG] agent=%s, agent_output_keys=%s, pending=%s, buf_len=%d, tc=%s",
+                        agent_name,
+                        list(agent_output.keys())[:3] if agent_output else None,
+                        'YES' if pending else 'NO',
+                        len(node_update.get('stream_buffer', '') or ''),
+                        bool(_tc_check),
+                    )
                     if pending:
                         try:
                             from app.utils.content_guard import StreamGuard
-                            guard = StreamGuard(check_interval=60)
+                            guard = StreamGuard(check_interval=300)  # P3-FIX: 从60增加到300，避免过早检测导致误判
                             # P1-FIX: plan 检测只对 resource_agent 生效
                             # (修复: path_agent 输出"学习计划"被误判 → SSE 卡死, 前端"生成中...")
                             # chat.py line 575, 594 已经有 agent_name == "resource_agent" 限制,
@@ -568,32 +700,82 @@ async def chat_send(
                             estimated_total = max(1, pending.get("max_tokens", 2048) // 3)
                             _milestones = {1, 3, 10, 20, 30, 50, 80, 120, 180, 250}
                             yield f"event: v1.progress\ndata: {json.dumps({'stage': 'generating', 'agent': agent_name, 'progress': 0, 'message': '正在生成...'}, ensure_ascii=False)}\n\n"
-                            async for chunk in _bridge_stream(
+                            # P0-心跳 2026-07-11: LLM 等待期间每 8s 向前端发送心跳,
+                            # 避免大提示词导致首 token 延迟时前端显示"卡死"
+                            _stream = _bridge_stream(
                                 spark,
                                 pending["messages"],
                                 pending.get("temperature", 0.7),
                                 pending.get("max_tokens", 2048),
                                 use_safe=pending.get("use_safe", False),
                                 chunk_size=pending.get("chunk_size", 2),
-                            ):
+                            )
+                            _heartbeat_interval = 8.0
+                            _stream_start = time.time()
+                            _stream_timeout = 120.0  # 2min 流式整体超时
+                            # P0-FIX (2026-07-12): 用 asyncio.wait 替代 asyncio.wait_for,
+                            # 心跳超时不再取消底层异步生成器, 防止 LLM 首 token >8s 时流被杀死
+                            _chunk_task = asyncio.ensure_future(_stream.__anext__())
+                            while True:
+                                _hb_task = asyncio.ensure_future(asyncio.sleep(_heartbeat_interval))
+                                done, _pending = await asyncio.wait(
+                                    [_chunk_task, _hb_task],
+                                    return_when=asyncio.FIRST_COMPLETED
+                                )
+                                if _chunk_task in done:
+                                    _hb_task.cancel()
+                                    try:
+                                        chunk = _chunk_task.result()
+                                    except StopAsyncIteration:
+                                        break
+                                    except Exception as _chunk_err:
+                                        logger.warning("SSE: chunk task 异常: %s", _chunk_err)
+                                        raise
+                                else:
+                                    # 心跳触发: 保留 _chunk_task 继续等待
+                                    _elapsed = time.time() - _stream_start
+                                    if _elapsed > _stream_timeout:
+                                        logger.warning("SSE: 流式总超时 %.0fs, 强制结束", _elapsed)
+                                        _chunk_task.cancel()
+                                        _force_stop = True  # P1-1: 同步终止外层 graph 循环
+                                        err_timeout = "\n\n（生成超时，请简化问题后重试）"
+                                        assistant_content += err_timeout
+                                        yield f"event: v1.message\ndata: {json.dumps({'content': err_timeout, 'agent': 'system', 'type': 'stream_timeout'}, ensure_ascii=False)}\n\n"
+                                        break
+                                    yield f"event: v1.progress\ndata: {json.dumps({'stage': 'generating', 'agent': agent_name, 'progress': -1, 'message': '正在生成中，请耐心等待...'}, ensure_ascii=False)}\n\n"
+                                    continue
                                 if chunk:
+                                    # P0-#2 (2026-07-11): 清理 Spark highlight token
+                                    chunk = clean_spark_tokens(chunk)
+                                    # P0-#1 (2026-07-11): 同请求 5s 内重复 chunk 丢弃
+                                    if _is_duplicate_chunk(_user_msg or "", chunk):
+                                        _chunk_task = asyncio.ensure_future(_stream.__anext__())
+                                        continue
+                                    # P1-#5 (2026-07-11): 流式完整性校验 (检测重复块)
+                                    integrity_ok, _ = _integrity.check(chunk)
+                                    if not integrity_ok:
+                                        logger.warning("P1-#5 丢弃重复块: %s...", chunk[:30])
+                                        _chunk_task = asyncio.ensure_future(_stream.__anext__())
+                                        continue
                                     safe_chunk = guard.feed(chunk)
                                     if safe_chunk is not None:
                                         assistant_content += safe_chunk
                                         chunk_count += 1
                                         yield f"event: v1.message\ndata: {json.dumps({'content': safe_chunk, 'agent': agent_name}, ensure_ascii=False)}\n\n"
-                                        if chunk_count in _milestones or (chunk_count > 250 and chunk_count % 50 == 0):
+                                        # P2 (2026-07-12): 仅里程碑发射 progress，不再每50 chunk 发射避免前端污染
+                                        if chunk_count in _milestones:
                                             pct = min(90, int(chunk_count / estimated_total * 100))
                                             yield f"event: v1.progress\ndata: {json.dumps({'stage': 'generating', 'agent': agent_name, 'progress': pct}, ensure_ascii=False)}\n\n"
+                                _chunk_task = asyncio.ensure_future(_stream.__anext__())
                             if guard.blocked:
                                 logger.warning("SSE: %s 输出被内容安全守卫拦截", agent_name)
                                 safe_fallback = guard.get_safe_content()
-                                assistant_content = safe_fallback
+                                assistant_content += safe_fallback  # P1-2: 追加而非覆盖
                                 yield f"event: v1.message\ndata: {json.dumps({'content': safe_fallback, 'agent': agent_name}, ensure_ascii=False)}\n\n"
                             elif agent_name == "resource_agent" and guard.finalize():
                                 logger.warning("SSE: %s 流式输出被anti-plan检测拦截", agent_name)
                                 safe_fallback = guard.get_safe_content()
-                                assistant_content = safe_fallback
+                                assistant_content += safe_fallback  # P1-2: 追加而非覆盖
                                 yield f"event: v1.message\ndata: {json.dumps({'content': safe_fallback, 'agent': agent_name}, ensure_ascii=False)}\n\n"
                             yield f"event: v1.progress\ndata: {json.dumps({'stage': 'complete', 'agent': agent_name, 'progress': 100}, ensure_ascii=False)}\n\n"
                         except Exception as stream_err:
@@ -603,10 +785,15 @@ async def chat_send(
                             yield f"event: v1.message\ndata: {json.dumps({'content': error_msg, 'agent': agent_name}, ensure_ascii=False)}\n\n"
                             # P2-D 2026-07-11: 通知前端 LLM 失败, 可显示重试按钮
                             yield f"event: v1.system_notice\ndata: {json.dumps({'type': 'agent_error', 'agent': agent_name, 'error': str(stream_err)[:200]}, ensure_ascii=False)}\n\n"
+                        # P1-1 (2026-07-12): 超时时 break 外层 for/async for 循环
+                        if _force_stop:
+                            break
                         continue
 
                     buf = node_update.get("stream_buffer", "")
                     if buf:
+                        # P1-FIX: agent stream_buffer 也需要清洗 Spark token (与 streaming 路径保持一致)
+                        buf = clean_spark_tokens(buf)
                         from app.utils.content_guard import get_guard
                         guard = get_guard()
                         safe, warning = guard.check(buf)
@@ -657,6 +844,15 @@ async def chat_send(
 
                     # [已删除] 全Agent英文饼图 — 仅 evaluation_agent 保留中文饼图(见下方)
 
+            # P1-1 (2026-07-12): 超时后跳出外层 async for 循环
+                if _force_stop:
+                    break
+
+            # P0 (2026-07-12): _force_stop / timeout 后跳过后续 Mermaid/小结/suggestion
+            if _force_stop:
+                yield f"event: v1.done\ndata: {json.dumps({'status': 'stopped', 'agent_switches': _agent_switch_count})}\n\n"
+                return
+
             # 评估报告：追加 Mermaid 饼图（后端生成，不受 LLM 影响）
             if assistant_agent == "evaluation_agent" and user_id:
                 try:
@@ -681,8 +877,8 @@ async def chat_send(
                         mm = f"\n\n```mermaid\npie title 知识点掌握分布 (共{total}个)\n    \"已掌握(>=70%)\" : {mastered}\n    \"学习中(35-70%)\" : {learning}\n    \"入门(<35%)\" : {beginner}\n```\n"
                         assistant_content += mm
                         yield f"event: v1.message\ndata: {json.dumps({'content': mm, 'agent': 'evaluation_agent'}, ensure_ascii=False)}\n\n"
-                except Exception:
-                    pass
+                except Exception as _e:
+                    logger.warning("SSE: BKT评估Mermaid图表生成失败: %s", _e)
             # 资源生成：追加 Mermaid 知识点分布图
             if assistant_agent == "resource_agent" and user_id:
                 try:
@@ -695,20 +891,20 @@ async def chat_send(
                         )[:6]
                         if sorted_kb:
                             lines_mm = [f'    "{name}": {score}' for name, score in sorted_kb]
-                            mm = "\n\n`mermaid\npie title 知识点覆盖分布\n" + "\n".join(lines_mm) + "\n`\n"
+                            mm = "\n\n```mermaid\npie title 知识点覆盖分布\n" + "\n".join(lines_mm) + "\n```\n"
                             assistant_content += mm
                             yield f"event: v1.message\ndata: {json.dumps({'content': mm, 'agent': 'resource_agent'}, ensure_ascii=False)}\n\n"
-                except Exception:
-                    pass
+                except Exception as _e:
+                    logger.warning("SSE: 资源分布Mermaid图表生成失败: %s", _e)
 
             # 出题：追加 Mermaid 难度分布图
             if assistant_agent == "question_agent":
                 try:
-                    mm = "\n\n`mermaid\npie title 题目难度分布\n    \"\u57fa\u7840\" : 40\n    \"\u4e2d\u7b49\" : 35\n    \"\u56f0\u96be\" : 25\n`\n"
+                    mm = "\n\n```mermaid\npie title 题目难度分布\n    \"\u57fa\u7840\" : 40\n    \"\u4e2d\u7b49\" : 35\n    \"\u56f0\u96be\" : 25\n```\n"
                     assistant_content += mm
                     yield f"event: v1.message\ndata: {json.dumps({'content': mm, 'agent': 'question_agent'}, ensure_ascii=False)}\n\n"
-                except Exception:
-                    pass
+                except Exception as _e:
+                    logger.warning("SSE: 题目难度Mermaid图表生成失败: %s", _e)
 
 
             # ═══════════════════════════════════════════════════════════
@@ -734,6 +930,16 @@ async def chat_send(
                 except Exception as _tc_err:
                     logger.debug("P1-16: 获取最终teaching_context失败 (non-fatal): %s", _tc_err)
                 _persisted = _persist_agent_output(assistant_agent, assistant_content, user_id, _captured_outputs, _final_tc)
+                # C7: 在持久化完成后发射 resource_ready (避免 LLM 失败时的孤儿记录)
+                # _persist_agent_output 会将 db_id 回写到 _captured_outputs["resource_agent"]["db_id"]
+                if _pending_resource_meta:
+                    _r_meta = _captured_outputs.get("resource_agent", {})
+                    _r_id = _r_meta.get("db_id", 0)
+                    _r_type = _pending_resource_meta.get("type", "document")
+                    _r_title = _pending_resource_meta.get("title") or _pending_resource_meta.get("topic", "")
+                    if _r_id:
+                        yield f"event: v1.resource_ready\ndata: {json.dumps({'type': 'resource_ready', 'resource_id': _r_id, 'resource_type': _r_type, 'title': _r_title}, ensure_ascii=False)}\n\n"
+                        logger.info("SSE: resource_ready 已发射 id=%d type=%s", _r_id, _r_type)
                 # v3: 事件驱动闭环 — Agent完成后自动触发下游
                 _post_agent_event_hook(assistant_agent, user_id, _captured_outputs)
                 _extract_and_boost(user_id, request.content)
@@ -750,8 +956,8 @@ async def chat_send(
                         # v5: auto_trigger → 推送资源预取事件，前端可提前加载首个节点资源
                         if latest.get("auto_trigger") and latest.get("intent") == "resource":
                             yield f"event: v1.prefetch\ndata: {json.dumps({'type': 'resource_prefetch', 'node': latest.get('topic', ''), 'status': 'queued'}, ensure_ascii=False)}\n\n"
-                except Exception:
-                    pass
+                except Exception as _e:
+                    logger.warning("SSE: 智能建议/预取推送失败: %s", _e)
             # ═══════════════════════════════════════════════════════════
             # P1-24: 复习提醒检查 — SSE review_due 事件
             # 每次对话完成后推送到期复习知识点，前端渲染 Dashboard 待复习卡片
@@ -767,8 +973,8 @@ async def chat_send(
                             "event: v1.review_due\n"
                             f"data: {json.dumps({'total': len(due_nodes), 'high_risk': len(high_risk), 'items': due_nodes[:5]}, ensure_ascii=False)}\n\n"
                         )
-                except Exception:
-                    pass  # 复习提醒非关键路径，失败不影响主流程
+                except Exception as _e:
+                    logger.warning("SSE: 复习提醒检查失败: %s", _e)  # 非关键路径，失败不影响主流程
 
         except Exception as e:
             logger.error("SSE: event_stream 异常: %s", e, exc_info=True)

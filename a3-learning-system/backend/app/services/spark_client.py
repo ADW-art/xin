@@ -111,10 +111,11 @@ class SparkClient:
             resp.raise_for_status()
             data = resp.json()
 
-            if data.get("code") != 0 and "error" in data:
-                code = data.get("code", "unknown")
-                msg = data["error"].get("message", data.get("message", "未知错误"))
-                raise RuntimeError(f"讯飞 API 错误 (code={code}): {msg}")
+            # 检测 API 级错误 (code != 0, 且 response 中有 error/message 字段)
+            code = data.get("code", 0)
+            if code != 0:
+                msg = data.get("message", data.get("error", {}).get("message", str(data)))
+                raise RuntimeError(f"Spark API 错误 (code={code}): {msg}")
 
             return data["choices"][0]["message"]["content"]
 
@@ -146,6 +147,8 @@ class SparkClient:
             )
             resp.raise_for_status()
 
+            yielded_any = False
+            first_line = True
             # 强制 UTF-8 解码，避免 iter_lines 自动编码检测错误导致中文乱码
             for line in resp.iter_lines():
                 if not line:
@@ -155,7 +158,23 @@ class SparkClient:
                     text = line.decode("utf-8")
                 except UnicodeDecodeError:
                     text = line.decode("latin-1")  # 兜底
+
+                if first_line:
+                    first_line = False
+                    logger.debug("Spark stream first line: %s", text[:200])
+
                 if not text.startswith("data: "):
+                    # 非流式错误响应 (API 直接返回 JSON 错误)
+                    if not text.startswith("data:") and text.strip().startswith("{"):
+                        try:
+                            err = json.loads(text.strip())
+                        except json.JSONDecodeError:
+                            logger.warning("Spark: 无法解析响应首行: %s", text[:200])
+                            continue
+                        code = err.get("code", "unknown")
+                        msg = err.get("message", err.get("error", {}).get("message", str(err)))
+                        logger.error("Spark API 错误 (model=%s, code=%s): %s", self.model, code, msg)
+                        raise RuntimeError(f"Spark API 错误 (code={code}): {msg}")
                     continue
 
                 data_str = text[6:]
@@ -167,12 +186,23 @@ class SparkClient:
                 except json.JSONDecodeError:
                     continue
 
+                # 检测流式行内嵌的 API 错误 (如 AppIdNoAuthError)
+                code = chunk.get("code", 0)
+                if code != 0:
+                    msg = chunk.get("message", str(chunk))
+                    logger.error("Spark API 错误 (model=%s, code=%s): %s", self.model, code, msg)
+                    raise RuntimeError(f"Spark API 错误 (code={code}): {msg}")
+
                 choices = chunk.get("choices", [])
                 if choices:
                     delta = choices[0].get("delta", {})
                     content = delta.get("content", "")
                     if content:
+                        yielded_any = True
                         yield content
+
+            if not yielded_any:
+                logger.warning("Spark stream: 流式请求返回 200 但未 yield 任何内容 (model=%s)", self.model)
 
         except requests.exceptions.RequestException as e:
             raise RuntimeError(f"流式请求失败: {e}") from e

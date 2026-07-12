@@ -13,10 +13,11 @@ import re
 
 from app.agents.state import AgentState
 from app.agents._msg_compat import last_msg_content  # 兼容 checkpoint 恢复后 dict 格式
-from app.core.database import SessionLocal
+from app.core.database import get_session
 from app.core.shared_utils import _structure_knowledge_base
 from app.models.profile import LearningProfile
 from app.services.spark_client import SparkClient
+from app.services.sse_bridge import StreamRequest, stream_request_to_dict
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +62,7 @@ EXTRACT_PROMPT = """你是一个学习画像分析专家。根据用户的回复
 def _save_to_db(user_id: int, profile: dict):
     if not user_id:
         return
-    db = SessionLocal()
-    try:
+    with get_session() as db:
         row = db.query(LearningProfile).filter(LearningProfile.user_id == user_id).first()
         if not row:
             row = LearningProfile(user_id=user_id)
@@ -77,7 +77,6 @@ def _save_to_db(user_id: int, profile: dict):
         if kb_raw and isinstance(kb_raw, str):
             row.knowledge_base = _structure_knowledge_base(kb_raw)
         row.dimension_scores = _compute_dimension_scores(profile, user_id)
-        db.commit()
         logger.info("ProfileAgent: 画像已存入 MySQL user_id=%d", user_id)
 
         # 同步 Profile → BKT：新概念用画像自评分初始化 BKT 先验
@@ -88,11 +87,6 @@ def _save_to_db(user_id: int, profile: dict):
                 sync_profile_to_bkt(user_id, kb)
             except Exception as e:
                 logger.warning("ProfileAgent: Profile→BKT 同步失败: %s", e)
-    except Exception as e:
-        db.rollback()
-        logger.error("ProfileAgent: MySQL 写入失败: %s", e)
-    finally:
-        db.close()
 
 
 def _compute_dimension_scores(profile: dict, user_id: int = 0) -> dict:
@@ -129,7 +123,8 @@ def _compute_dimension_scores(profile: dict, user_id: int = 0) -> dict:
             knowledge_score = round((_mastered / max(_total, 1)) * 100)
         else:
             knowledge_score = min(95, int(avg_score * 0.6 + min(topic_count * 10, 35) + (25 if has_tech else 0)))
-    except Exception:
+    except Exception as e:
+        logger.warning("Knowledge score BKT lookup failed for user %s, using fallback: %s", user_id, e)
         knowledge_score = min(95, int(avg_score * 0.6 + min(topic_count * 10, 35) + (25 if has_tech else 0)))
     if "入门" in kb_raw or "零基础" in kb_raw or "没学过" in kb_raw:
         knowledge_score = min(knowledge_score, 35)
@@ -150,7 +145,8 @@ def _compute_dimension_scores(profile: dict, user_id: int = 0) -> dict:
             logic_score = 78 if any(w in style for w in ["逻辑","推理","分析","系统"]) else \
                           58 if any(w in style for w in ["视觉","图像","图表","直观"]) else \
                           52 if any(w in style for w in ["动手","实践","操作"]) else 62
-    except Exception:
+    except Exception as e:
+        logger.warning("Logic score BKT calculation failed for user %s, using default 62: %s", user_id, e)
         logic_score = 62
 
     hours = float(profile.get("weekly_hours") or 0)
@@ -163,7 +159,8 @@ def _compute_dimension_scores(profile: dict, user_id: int = 0) -> dict:
             practice_score = min(95, round((total_correct / total_attempts) * 100))
         else:
             practice_score = min(90, 25 + int(hours * 7))
-    except Exception:
+    except Exception as e:
+        logger.warning("Practice score BKT calculation failed for user %s, using fallback: %s", user_id, e)
         practice_score = min(90, 25 + int(hours * 7))
     if any(w in goal for w in ["项目","实战","工作","求职","面试"]):
         practice_score = min(95, practice_score + 10)
@@ -180,7 +177,8 @@ def _compute_dimension_scores(profile: dict, user_id: int = 0) -> dict:
             speed_score = round((_mst / max(_ttl, 1)) * 100)
         else:
             speed_score = 72 if pref in ["video","视频"] else 65 if pref in ["code","代码"] else 78 if pref in ["interactive","交互"] else 60
-    except Exception:
+    except Exception as e:
+        logger.warning("Speed score BKT calculation failed for user %s, using fallback: %s", user_id, e)
         speed_score = 72 if pref in ["video","视频"] else 65 if pref in ["code","代码"] else 78 if pref in ["interactive","交互"] else 60
 
     err = str(profile.get("error_patterns", "") or "")
@@ -196,7 +194,8 @@ def _compute_dimension_scores(profile: dict, user_id: int = 0) -> dict:
             focus_score = round(max(30, min(100, 100 - wk_cnt * 15 - _er_fs * 50)))
         else:
             focus_score = 75 if (not err or err in ["无","暂无"]) else max(30, 70 - len(_re.split(r"[,，、;；]", err)) * 8)
-    except Exception:
+    except Exception as e:
+        logger.warning("Focus score BKT calculation failed for user %s, using fallback: %s", user_id, e)
         focus_score = 75 if (not err or err in ["无","暂无"]) else max(30, 70 - len(_re.split(r"[,，、;；]", err)) * 8)
 
     overall_score = round(knowledge_score*0.25 + logic_score*0.18 + practice_score*0.22 + speed_score*0.15 + focus_score*0.20, 1)
@@ -258,6 +257,7 @@ def _build_summary(profile: dict) -> str:
 
 
 def profile_agent_node(state: AgentState, spark: SparkClient) -> dict:
+    state = AgentState.model_validate(state)
     state = dict(state)  # TypedDict → dict
     profile = state.get("user_profile") or {}
     last_msg = last_msg_content(state.get("messages", []))
@@ -315,6 +315,28 @@ def profile_agent_node(state: AgentState, spark: SparkClient) -> dict:
                     logger.info("ProfileAgent: 规则提取 preferred_resource_type=%s", ptype)
                     break
 
+        # 学习阶段
+        if "learning_phase" in dict(unfilled):
+            for phase, kws in [("beginner", ["零基础","刚入门","小白","新手","初学","没基础","刚开始","入门"]),
+                               ("intermediate", ["有基础","学过一些","中级","提高","进阶","熟悉","会一些","了解"]),
+                               ("advanced", ["熟练","精通","高级","资深","多年","老手","专家"])]:
+                if any(kw in last_msg for kw in kws):
+                    profile["learning_phase"] = phase
+                    extracted_any = True
+                    logger.info("ProfileAgent: 规则提取 learning_phase=%s", phase)
+                    break
+
+        # 兴趣方向
+        if "interest_direction" in dict(unfilled):
+            for direc, kws in [("theory", ["理论","原理","算法","数学","基础原理","底层","概念","深入理解"]),
+                               ("practice", ["实践","项目","动手","应用","开发","工程","做项目","实战"]),
+                               ("exam_competition", ["刷题","竞赛","考试","面试","考证","考级","笔试","题"])]:
+                if any(kw in last_msg for kw in kws):
+                    profile["interest_direction"] = direc
+                    extracted_any = True
+                    logger.info("ProfileAgent: 规则提取 interest_direction=%s", direc)
+                    break
+
         # ── LLM 提取 知识基础 ──
         if "knowledge_base" in dict(unfilled):
             if any(kw in last_msg for kw in ["学过","基础","了解","熟悉","掌握","懂","会","知道","入门","初学者","零基础","经验","年"]):
@@ -329,7 +351,7 @@ def profile_agent_node(state: AgentState, spark: SparkClient) -> dict:
                     from app.utils.llm_helper import safe_chat_sync
                     raw = safe_chat_sync(spark, extract_messages, temperature=0.2, max_tokens=256,
                                         fallback='{"field":"knowledge_base","value":null}', retries=2)
-                    extracted = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
+                    extracted = json.loads(re.sub(r'^```json|```$', '', raw.strip()).strip())
                     val = extracted.get("value")
                     if val is None and "knowledge_base" in extracted:
                         val = extracted["knowledge_base"]
@@ -384,6 +406,8 @@ def profile_agent_node(state: AgentState, spark: SparkClient) -> dict:
                     "cognitive_style": ["好的！你平时更喜欢看视频学、看书学、还是动手做项目学？", "记下了。学习方式上你是视觉型还是动手型呀？"],
                     "preferred_resource_type": ["嗯嗯。那你最喜欢哪种学习材料？文档、代码示例还是视频？", "理解了。学习材料方面有偏好吗？"],
                     "error_patterns": ["最后一个问题~回顾之前的学习，有没有经常记混或搞错的知识点？", "差不多了！以前学习时有没有容易混淆的地方？"],
+                    "learning_phase": ["好的！你觉得自己目前在什么阶段？零基础、有了一定基础、还是已经很熟练了？", "明白了。你觉得自己目前的学习阶段是怎样的？"],
+                    "interest_direction": ["了解了。你学习更偏理论原理、动手实践、还是刷题应试？", "收到。你的兴趣方向是偏理论还是偏实践呢？"],
                 }
                 options = transitions.get(next_dim, [f"了解了！那 {next_q}"])
                 opener = random.choice(options) if len(options) > 1 else options[0]
@@ -415,6 +439,8 @@ def profile_agent_node(state: AgentState, spark: SparkClient) -> dict:
                         "cognitive_style": "说起来，你平时更喜欢看视频学、看书学、还是动手做项目学？",
                         "preferred_resource_type": "学习材料方面，你更喜欢文档、代码示例还是视频呢？",
                         "error_patterns": "回顾之前的学习，有没有哪些知识点你经常搞混的？",
+                        "learning_phase": "你觉得自己目前处于哪个阶段呢？零基础入门还是有了一定基础？",
+                        "interest_direction": "学习方向上，你更偏向研究理论原理、做实践项目、还是刷题准备考试？",
                     }
                     opener = natural_openers.get(next_dim, next_q)
                     buffered_reply = f"{opener}"
@@ -438,12 +464,12 @@ def profile_agent_node(state: AgentState, spark: SparkClient) -> dict:
             **state.get("agent_outputs", {}),
             "profile_agent": {
                 **profile,
-                "stream_pending": {
-                    "messages": [{"__pre_collected__": chunks, "role": "system", "content": ""}],
-                    "temperature": 0,
-                    "max_tokens": 0,
-                    "chunk_size": 0,
-                },
+                "stream_pending": stream_request_to_dict(StreamRequest(
+                    messages=[{"__pre_collected__": chunks, "role": "system", "content": ""}],
+                    temperature=0,
+                    max_tokens=0,
+                    chunk_size=0,
+                )),
             },
         },
     }

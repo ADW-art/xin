@@ -12,6 +12,7 @@ from app.agents.state import AgentState
 from app.agents._msg_compat import last_msg_content  # 兼容 checkpoint 恢复后 dict 格式
 from app.services.spark_client import SparkClient
 from app.services.bkt_service import get_tracker
+from app.services.sse_bridge import StreamRequest, stream_request_to_dict
 
 logger = logging.getLogger(__name__)
 
@@ -168,9 +169,10 @@ pie title 知识点掌握分布
 当前处于Python入门阶段，已掌握基本语法但函数高级特性薄弱。核心行动: 接下来2周集中攻克装饰器和闭包。"""
 
 
-# v3: speed_score 计算缓存 (TTL 300s, 避免每次评估都查全表)
+# v3: speed_score 计算缓存 (TTL 300s, max 512 entries, 避免每次评估都查全表)
 _speed_cache: dict[int, tuple[float, float]] = {}  # {user_id: (score, timestamp)}
 _SPEED_CACHE_TTL = 300  # 5 分钟
+_SPEED_CACHE_MAX_SIZE = 512
 
 
 def _compute_speed_score(user_id: int) -> int:
@@ -183,10 +185,9 @@ def _compute_speed_score(user_id: int) -> int:
             return int(score)
 
     try:
-        from app.core.database import SessionLocal
+        from app.core.database import get_session
         from app.models.answer_record import AnswerRecord
-        db = SessionLocal()
-        try:
+        with get_session() as db:
             records = db.query(AnswerRecord).filter(
                 AnswerRecord.user_id == user_id
             ).all()
@@ -200,15 +201,20 @@ def _compute_speed_score(user_id: int) -> int:
                     score = 50
             else:
                 score = 50
-        finally:
-            db.close()
-    except Exception:
+    except Exception as e:
+        logger.warning("Speed score calculation failed for user %s, using default 50: %s", user_id, e)
         score = 50
     _speed_cache[user_id] = (float(score), now)
+    # 缓存上限: 超过时淘汰最旧的 25% 条目
+    if len(_speed_cache) > _SPEED_CACHE_MAX_SIZE:
+        stale = sorted(_speed_cache.items(), key=lambda x: x[1][1])[:_SPEED_CACHE_MAX_SIZE // 4]
+        for uid, _ in stale:
+            _speed_cache.pop(uid, None)
     return int(score)
 
 
 def evaluation_agent_node(state: AgentState, spark: SparkClient) -> dict:
+    state = AgentState.model_validate(state)
     state = dict(state)  # TypedDict → dict
     profile = state.get("user_profile") or {}
 
@@ -277,17 +283,18 @@ def evaluation_agent_node(state: AgentState, spark: SparkClient) -> dict:
     speed_score = _compute_speed_score(state.get("user_id", 0))
 
     # v3: focus — 4因子加权: 近7天会话×20 + 日均在线×30 + 答题频率×25 + 复习完成×25
+    code_correct = 0
+    code_total = 0
     try:
-        from app.core.database import SessionLocal as _SessionLocal2
+        from app.core.database import get_session as _get_session2
         from app.models.conversation import Conversation as _Conv
         from app.models.answer_record import AnswerRecord as _AnsRec
         from app.models.review_schedule import ReviewScheduleModel as _RevSch
-        from datetime import datetime as _dt2, timedelta as _td2
-        _db2 = _SessionLocal2()
-        _now = _dt2.utcnow()
+        from datetime import datetime as _dt2, timedelta as _td2, timezone as _tz
+        _now = _dt2.now(_tz.utc)
         _week_ago = _now - _td2(days=7)
         _uid = state.get("user_id", 0)
-        try:
+        with _get_session2() as _db2:
             # 因子1: 近7天会话天数 (权重20)
             _convs_7d = _db2.query(_Conv).filter(
                 _Conv.user_id == _uid,
@@ -337,14 +344,26 @@ def evaluation_agent_node(state: AgentState, spark: SparkClient) -> dict:
             else:
                 _review_completion = 0.0
 
+            # 代码调试成功率 (权重25) — 合并到同一会话
+            _code_kw = ["代码", "实现", "编写", "debug", "调试", "coding", "implement"]
+            _code_records = _db2.query(_AnsRec).filter(
+                _AnsRec.user_id == _uid,
+                _AnsRec.is_correct.isnot(None)
+            ).all()
+            for _r in _code_records:
+                _conc = str(_r.concept or "") + str(_r.user_answer or "")
+                if any(kw in _conc.lower() for kw in _code_kw):
+                    code_total += 1
+                    if _r.is_correct:
+                        code_correct += 1
+
             focus_score = round(
                 _recent_7d_sessions * 20 + _daily_online_hours * 30 +
                 _answer_freq * 25 + _review_completion * 25
             )
             focus_score = max(0, min(100, focus_score))
-        finally:
-            _db2.close()
-    except Exception:
+    except Exception as e:
+        logger.warning("Focus score calculation failed for user %s, using default 50: %s", _uid, e)
         focus_score = 50  # 数据库不可用时降级
 
     # v3: logic — BKT方差×40 + 跨领域迁移×35 + 代码调试×25
@@ -391,29 +410,7 @@ def evaluation_agent_node(state: AgentState, spark: SparkClient) -> dict:
         else:
             cross_domain_score = 17.5
 
-        # 因子3: 代码调试成功率 (权重25) — 涉及代码编写/调试类题目的正确率
-        _code_kw = ["代码", "实现", "编写", "debug", "调试", "coding", "implement"]
-        code_correct = 0
-        code_total = 0
-        try:
-            from app.core.database import SessionLocal as _SLC
-            from app.models.answer_record import AnswerRecord as _ARec
-            _dbc = _SLC()
-            try:
-                _code_records = _dbc.query(_ARec).filter(
-                    _ARec.user_id == state.get("user_id", 0),
-                    _ARec.is_correct.isnot(None)
-                ).all()
-                for _r in _code_records:
-                    _conc = str(_r.concept or "") + str(_r.user_answer or "")
-                    if any(kw in _conc.lower() for kw in _code_kw):
-                        code_total += 1
-                        if _r.is_correct:
-                            code_correct += 1
-            finally:
-                _dbc.close()
-        except Exception:
-            pass
+        # 因子3: BKT方差×40 + 跨领域迁移×35 + 代码调试×25 (已在上方合并查询)
         if code_total > 0:
             code_score = min(1.0, code_correct / code_total) * 25
         else:
@@ -488,7 +485,7 @@ def evaluation_agent_node(state: AgentState, spark: SparkClient) -> dict:
         "agent_outputs": {
             **state.get("agent_outputs", {}),
             "evaluation_agent": {
-                "stream_pending": {"messages": messages, "temperature": 0.6, "max_tokens": 4096},
+                "stream_pending": stream_request_to_dict(StreamRequest(messages=messages, temperature=0.6, max_tokens=4096, use_safe=True)),
                 "dimension_scores": real_dimension_scores,
             },
         },

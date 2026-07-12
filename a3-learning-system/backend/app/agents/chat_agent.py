@@ -12,6 +12,7 @@ import logging
 from app.agents.state import AgentState
 from app.agents._msg_compat import last_msg_content  # 兼容 checkpoint 恢复后 dict 格式
 from app.core.shared_utils import _get_profile_status, _build_user_context  # 画像状态分析 + 长期记忆
+from app.services.sse_bridge import StreamRequest, stream_request_to_dict
 
 logger = logging.getLogger(__name__)
 
@@ -92,30 +93,31 @@ CHAT_SYSTEM_PROMPT = """你是 A3 学习助手，一个专业、友好、有洞�
 - 如果下方有【画像引导】提示，在回复末尾自然融入一句追问（只问一个维度，像朋友聊天）"""
 
 CHAT_PROFILE_GUIDE_INCOMPLETE = """
-【画像软引导 — 仅在用户消息含明确学习意图时使用】
-用户学习画像存在以下缺失维度：{empty_dims}。
-**重要：这是软引导，不是强制任务。**
+[system: profile_guide mode=soft]
+User profile missing dimensions: {empty_dims}.
+This is a soft guide, not a mandatory task.
 
-执行规则（参考 AutoGen 软引导模式）：
-1. **触发条件**：仅当用户消息含学习/技术关键词时才考虑引导
-2. **不触发场景**（直接忽略本提示，正常回答用户问题）：
-   - 用户在问"你是谁/你能做什么"等系统性问题
-   - 用户在做闲聊/问候/感谢/情绪表达
-   - 用户在做技术答疑（"什么是XX"/"XX怎么用"等）—— 这种情况 learning_goal 缺失不应影响答疑
-   - 用户在做代码调试
-3. **触发时**：仅在回复末尾**自然地**带出 1 个维度的引导（用对话方式，不要列表式提问）
-4. **追问间隔**：每个维度至少 5 轮对话内不要重复追问
-5. **优先级**：缺「学习目标」「每周时间」对教学影响大，可优先；其他维度可延后
+Rules:
+1. Only engage when the user message contains learning/technical keywords
+2. Skip entirely (ignore this instruction, answer normally) when user is:
+   - Asking about system capabilities (who are you / what can you do)
+   - Casual chat / greetings / thanks / emotional expression
+   - Technical Q&A — missing learning_goal should NOT block answering
+   - Debugging code
+3. When triggered: naturally bring up ONE dimension at the END of your reply
+4. Do not ask the same dimension twice within 5 conversation turns
+5. Priority: learning_goal and weekly_hours have higher impact
 
-参考引导措辞（按需选用，不要直接复制）：
-- 缺学习目标 → 「你学这个主要是为了考试、找工作、还是个人兴趣呢？」
-- 缺每周时间 → 「你每周大概能抽出多少时间来学习呢？」
-- 缺知识基础 → 「对了，你之前学过哪些相关的内容呀？」
-- 缺认知风格 → 「你更喜欢看视频学、读文档学、还是动手敲代码学呢？」
-- 缺偏好资源 → 「你喜欢看文档资料，还是更喜欢看视频教程呀？」"""
+Example approaches (adapt, do not copy verbatim):
+- Missing learning_goal: ask about their purpose (exam/job/interest)
+- Missing weekly_hours: ask about their weekly availability
+- Missing knowledge_base: ask what they have studied before
+- Missing cognitive_style: ask about preferred learning format
+- Missing preferred_resource_type: ask about media preference"""
 
 CHAT_PROFILE_GUIDE_COMPLETE = """
-【画像引导】用户画像已完整。回复结尾自然推荐下一步：做题测试/规划路径/评估报告等。不要追问画像问题。"""
+[system: profile_guide mode=complete]
+User profile is complete. At the end of your reply, naturally suggest next steps: practice questions, learning path, assessment report, etc. Do not ask profile questions."""
 
 
 def chat_agent_node(state: AgentState, spark) -> dict:
@@ -124,11 +126,13 @@ def chat_agent_node(state: AgentState, spark) -> dict:
     从 supervisor_node 拆分，专注回复生成，不做路由判断。
     """
 
+    state = AgentState.model_validate(state)
+
     from app.core.shared_utils import _build_llm_messages
 
-    all_messages = state.get("messages", []) if isinstance(state, dict) else state.messages
-    profile = state.get("user_profile", {}) if isinstance(state, dict) else (state.user_profile or {})
-    user_id = state.get("user_id", 0) if isinstance(state, dict) else getattr(state, "user_id", 0)
+    all_messages = state.messages
+    profile = state.user_profile or {}
+    user_id = state.user_id or 0
     last_msg = last_msg_content(all_messages)
 
     _, empty_dims = _get_profile_status(profile)
@@ -152,7 +156,8 @@ def chat_agent_node(state: AgentState, spark) -> dict:
     human_ai_msgs = []
     try:
         human_ai_msgs = [m for m in all_messages
-                         if (hasattr(m, '__class__') and m.__class__.__name__ in ('HumanMessage', 'AIMessage'))]
+                         if (hasattr(m, '__class__') and m.__class__.__name__ in ('HumanMessage', 'AIMessage'))
+                         or (isinstance(m, dict) and m.get('type', '') in ('human', 'ai'))]
         # all_messages 包含当前用户的 HumanMessage，所以如果 >1 条说明有历史
         if len(human_ai_msgs) > 1:
             has_history = True
@@ -160,7 +165,8 @@ def chat_agent_node(state: AgentState, spark) -> dict:
             for m in human_ai_msgs[-6:][:-1]:  # 排除当前消息
                 if hasattr(m, 'content') and isinstance(m.content, str) and m.content.strip():
                     history_topics.append(m.content[:30])
-    except Exception:
+    except Exception as e:
+        logger.warning("History topic extraction failed: %s", e)
         pass
 
     # P-上下文: 判断当前用户消息是否在问自我介绍/能力
@@ -184,19 +190,8 @@ def chat_agent_node(state: AgentState, spark) -> dict:
     else:
         intro_mode = "N/A (非自我介绍问题)"
 
-    # 动态注入上下文状态标记
-    context_marker = (
-        f"\n\n## 当前对话上下文状态\n"
-        f"- has_history: {has_history}\n"
-        f"- 历史消息数: {len(human_ai_msgs) - 1 if has_history else 0}\n"
-        f"- 当前消息是否问自我介绍: {is_self_intro_question}\n"
-        f"- 当前消息是否要求再介绍: {is_repeat_intro}\n"
-        f"- **自我介绍模式: {intro_mode}**\n"
-    )
     if has_history and history_topics:
-        context_marker += f"- 近期话题: {' | '.join(history_topics[-3:])}\n"
-
-    chat_system = chat_system + context_marker
+        chat_system = chat_system + f"\n\n## 近期话题\n近期对话涉及: {' | '.join(history_topics[-3:])}"
 
     chat_messages = _build_llm_messages(chat_system, all_messages, last_msg, max_history=12)
 
@@ -207,13 +202,13 @@ def chat_agent_node(state: AgentState, spark) -> dict:
         "next_agent": "END",
         "agent_outputs": {
             "chat_agent": {
-                "stream_pending": {
-                    "messages": chat_messages,
-                    "temperature": 0.7,
-                    "max_tokens": 1024,
-                    "use_safe": True,
-                    "chunk_size": 2,
-                }
+                "stream_pending": stream_request_to_dict(StreamRequest(
+                    messages=chat_messages,
+                    temperature=0.7,
+                    max_tokens=1024,
+                    use_safe=True,
+                    chunk_size=12,
+                ))
             }
         },
     }

@@ -124,13 +124,19 @@ const typeIcons: Record<string, string> = {
   question_set: 'EditPen',
   video_script: 'VideoPlay',
   code_example: 'Monitor',
+  reading_material: 'Reading',
+  diagram: 'PictureFilled',
+  smart_tutoring: 'StarFilled',
 }
 const typeLabels: Record<string, string> = {
   document: '知识文档',
   mindmap: '思维导图',
   question_set: '练习题集',
-  video_script: '讲解脚本',
+  video_script: '视频脚本',
   code_example: '代码案例',
+  reading_material: '拓展阅读',
+  diagram: '图解说明',
+  smart_tutoring: '智能辅导',
 }
 
 function typeIcon(type?: string): string {

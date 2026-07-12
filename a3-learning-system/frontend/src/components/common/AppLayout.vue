@@ -392,7 +392,7 @@ function doLogout() {
   position: relative;
   background: var(--bg-page);
 }
-.content > :deep(*) {
+.content :deep(> *) {
   max-width: 1280px;
   margin: 0 auto;
 }
@@ -419,7 +419,7 @@ function doLogout() {
   .sidebar.sidebar-open { left: 0; }
   .main { width: 100%; }
   .content { padding: 12px; }
-  .content > :deep(*) { max-width: 100%; }
+  .content :deep(> *) { max-width: 100%; }
   .topbar { padding: 0 16px; }
   .app { flex-direction: column; }
 }
