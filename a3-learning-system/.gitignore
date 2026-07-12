@@ -9,6 +9,9 @@ venv/
 node_modules/
 dist/
 
+# Playwright / browser testing artifacts (根目录的已在根 .gitignore 排除)
+.playwright-mcp/
+
 # IDE
 .vscode/
 .idea/
@@ -54,6 +57,13 @@ _c_*.html
 _cnsb.html
 _page_*.html
 _saiti_list.html
+
+# ---- backend 根目录的调试/中间日志 ----
+backend/_reembed.log
+backend/debug_*.log
+backend/full_ingest.log
+backend/ocr_progress*.log
+backend/_emb*.f32
 
 # ===================================================================
 # A3 Learning System — 补充规则 (保证 clone 后能直接跑通)

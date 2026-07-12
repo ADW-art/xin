@@ -1,0 +1,25 @@
+chore(git): 从历史中移除误入仓的大文件 (node_modules / 模型 / 日志 / playwright)
+
+本仓库的 8 个提交中混入了以下不该入仓的文件, 导致 git push 推送包体膨胀到
+~78 万行 / 1-2GB, 单次推送超时失败, 推送完全卡住。
+
+清理内容 (268 个文件):
+- node_modules/playwright-core/** (110 个文件) — npm 包, 应通过 package-lock.json 重装
+- a3-learning-system/backend/models/bge-large-zh-v1.5/** (12 个文件) — ML 模型, 由脚本运行时下载
+- .playwright-mcp/console-*.log / page-*.yml (150+ 个) — 浏览器测试调试产物
+- a3-learning-system/backend/_rebuild_source.jsonl — 向量重建源数据
+- a3-learning-system/backend/_emb.f32 — 嵌入向量中间产物
+- a3-learning-system/backend/_reembed.log / debug_*.log / full_ingest.log / ocr_progress*.log (8 个) — 后端调试日志
+
+本 commit 只从 index 移除 (--cached), 不影响工作目录文件。
+
+.gitignore 补强:
+- 根 .gitignore: 加 node_modules/ + **/models/ + .f32/.bin/.safetensors/.pt 防御性规则
+- a3-learning-system/.gitignore: 加 .playwright-mcp/ + backend 调试日志白名单
+
+预期效果:
+- 后续 push 体积从 1-2GB 降到 ~5-10MB
+- 单次推送几秒完成
+- clone 后运行 setup 脚本即可恢复完整环境
+
+Co-Authored-By: Claude <noreply@anthropic.com>
