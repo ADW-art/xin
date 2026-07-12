@@ -458,8 +458,9 @@ def _get_reranker():
 
     加载策略（与 BGE-M3 一致）:
       1. 本地路径优先 (reranker_local_path)
-      2. HF 在线下载（最多 3 次重试，指数退避 1s/3s/9s）
-      3. 全部失败 → 返回 None, RAG 自动降级 (不阻塞响应)
+      2. 离线缓存加载 (local_files_only=True, 已缓存则零网络开销)
+      3. HF 在线下载（最多 3 次重试，指数退避 1s/3s/9s）
+      4. 全部失败 → 返回 None, RAG 自动降级 (不阻塞响应)
 
     修复: 增加本地路径 + 重试 + 快速失败, 避免 hf-mirror.com 网络超时卡住
     之前现象: 首次 RAG 检索时 CrossEncoder 内部 HEAD 请求 read timeout=10s
@@ -495,16 +496,29 @@ def _get_reranker():
         except Exception as e:
             logger.warning("RAG: Reranker 本地路径加载失败, 降级到 HF 下载: %s", e)
 
-    # ── 策略2: HF 模型名（最多 3 次重试，指数退避 1s/3s/9s）──
+    # ── 策略2: HF 模型名, 优先 local_files_only (已缓存则零网络开销) ──
     import time as _time
+
+    # 先尝试纯离线加载 — 模型已缓存则瞬间完成, 无 HEAD 请求
+    logger.info("RAG: 加载 Reranker %s (离线模式, 使用缓存)...", reranker_name)
+    try:
+        _reranker = CrossEncoder(reranker_name, trust_remote_code=True, local_files_only=True)
+        if _device != "cpu":
+            _reranker.model = _reranker.model.to(_device)
+        logger.info("RAG: Reranker 加载完成 (离线缓存, device=%s)", _device)
+        return _reranker
+    except Exception as e:
+        logger.info("RAG: 离线缓存未命中 (%s), 降级到在线下载...", str(e)[:80])
+
+    # 降级: HF 在线下载（最多 3 次重试，指数退避 1s/3s/9s）
     max_retries = 3
     for attempt in range(1, max_retries + 1):
-        logger.info("RAG: 加载 Reranker %s (HF模式, 第 %d/%d 次)...", reranker_name, attempt, max_retries)
+        logger.info("RAG: 加载 Reranker %s (HF在线, 第 %d/%d 次)...", reranker_name, attempt, max_retries)
         try:
             _reranker = CrossEncoder(reranker_name, trust_remote_code=True)
             if _device != "cpu":
                 _reranker.model = _reranker.model.to(_device)
-            logger.info("RAG: Reranker 加载完成 (HF模式, 第%d次成功, device=%s)", attempt, _device)
+            logger.info("RAG: Reranker 加载完成 (HF在线, 第%d次成功, device=%s)", attempt, _device)
             return _reranker
         except Exception as e:
             logger.warning("RAG: Reranker 加载失败 (第%d/%d次): %s", attempt, max_retries, e)

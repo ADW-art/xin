@@ -35,6 +35,7 @@ STALE_ONE_SHOT_FLAGS: frozenset[str] = frozenset({
     "init_teaching",                # 启动 26 节点教学循环 (P0-1 修复)
     "teaching_continue",            # 用户说"继续"触发下一节点
     "replan_path",                  # 路径动态重规划信号
+    "_replan_reason",               # replan_path 的触发原因 (无 replan_path 时残留无意义)
     "teach_target_index",           # 指定教学节点索引
     "_explicit_teach",              # P2-1 (2026-07-12): supervisor 显式教学授权标志
 

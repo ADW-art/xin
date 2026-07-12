@@ -1006,7 +1006,7 @@ def _route_with_guards(intent: str, result: dict, state: dict, profile: dict,
     # checkpoint 持久化可能保留上一轮对话的 replan_path=True,
     # 导致 path_agent 误入 replan_remaining_path 分支再回退, 增加无意义开销
     _merged_ctx = {**state.get("context", {}), **context_result}
-    if next_agent == "path_agent" and _merged_ctx.get("replan_path") and intent == "path":
+    if next_agent in ("path_agent", "collaborative_path") and _merged_ctx.get("replan_path") and intent == "path":
         if not _merged_ctx.get("_replan_reason"):
             _merged_ctx.pop("replan_path", None)
             logger.info("Supervisor: 清理残留 replan_path (非 replan 触发的 path 请求)")

@@ -39,7 +39,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - chroma_data:/chroma/chroma
+      - ./backend/chroma_data_local:/chroma/chroma
 
 volumes:
   mysql_data:

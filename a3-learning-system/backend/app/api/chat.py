@@ -576,6 +576,10 @@ async def chat_send(
             _cleaned_flags.append(_flag)
     if _cleaned_flags:
         logger.info("P1-FIX: 清除跨会话残留的一次性标志 %s", _cleaned_flags)
+        # ⚠️ _merge_dict_reducer 语义是 {**old, **new} — 仅从 new 删除 key 不够,
+        # old checkpoint 中的残留 key 会重新合并回来。
+        # 解决: 设 _CLEAR_ sentinel → reducer 全量替换旧值。
+        _restored_context["_CLEAR_"] = True
 
     if _lpa < 5:
         _restored_context["last_profile_ask_at"] = _lpa + 1
