@@ -25,6 +25,8 @@ EVALUATION_PROMPT = """你是一个学习效果评估专家，风格对标专业
 4. **禁止空洞鼓励** — 不得出现"加油""别灰心""你很棒""继续努力"等无信息量的鼓励语。鼓励必须基于具体进步数据（如"你的列表操作正确率从上周的45%提升到本周的72%，说明刻意练习起了作用"）
 5. **禁止模糊评价** — 每个维度结论必须引用画像中的具体数字。禁止"你的基础知识还不错"（太模糊），必须说"你已掌握 X/Y 个知识点（掌握率 Z%），其中 [A]、[B]、[C] 最牢固(p>0.8)，[D]、[E]、[F] 最薄弱(p<0.4)"
 6. **禁止跳过数据** — 若画像中某维度显示"未填写"，必须明确指出"该维度数据不足，建议补充"，不得跳过或用默认值填充
+7. **禁止占位符** — 输出的每个数字必须是来自BKT数据/画像的真实值。绝对禁止输出 "X"、"Y"、"Z"、"M"、"N"、"K" 等占位符字母。如果数据不足，写"暂无数据"而不是占位符。
+8. **【您的姓名】禁止** — 输出中不得出现 "[您的姓名]" 字样。若画像无姓名数据，使用 "学员" 或跳过姓名直接写评估内容。
 
 ## 数据来源标注规则（必须遵守）
 每个数据/结论必须用标签标注其来源：
@@ -234,8 +236,22 @@ def evaluation_agent_node(state: AgentState, spark: SparkClient) -> dict:
     if has_bkt:
         parts.append("\n## BKT 知识追踪数据（算法推算，非用户自评）")
         parts.append(f"- 已掌握知识点：{bkt_data['summary']['mastered']}/{bkt_data['summary']['total']}")
-        parts.append(f"- 各知识点掌握概率：{bkt_data['nodes']}")
+        # P1 (2026-07-12): 格式化 BKT 节点数据为 LLM 可读的表格,
+        # 替代 Python dict repr (如 "{'变量': BKTNode(...)}") 避免 LLM 解析失败后填充占位符
+        _node_lines = []
+        for _name, _node in tracker.nodes.items():
+            _node_lines.append(
+                f"  - {_name}: p_known={_node.p_known:.2f}, "
+                f"attempts={_node.total_attempts}, correct={_node.correct_count}"
+            )
+        if _node_lines:
+            parts.append("- 各知识点掌握详情（概念名: 掌握概率, 答题数, 正确数）：")
+            parts.extend(_node_lines)
         parts.append(f"- 薄弱环节：{tracker.get_weak_points()}")
+        # 追加 BKT 汇总统计（帮助 LLM 计算饼图和百分比）
+        parts.append(f"- BKT汇总: mastered={bkt_data['summary']['mastered']}, "
+                     f"total={bkt_data['summary']['total']}, "
+                     f"total_attempts={bkt_data['summary']['total_attempts']}")
 
     # 守卫：BKT 无数据且画像为空 → 不调用 LLM，直接返回引导消息
     if not has_bkt and not has_profile:
@@ -336,7 +352,12 @@ def evaluation_agent_node(state: AgentState, spark: SparkClient) -> dict:
                         _completed += 1
                     if _r.last_reviewed:
                         _intv = _intervals[min(_r.interval_index, len(_intervals) - 1)]
-                        if _r.last_reviewed + _td2(days=_intv) <= _now:
+                        # P1 (2026-07-12): DB datetime 是 naive (无时区), _now 是 aware (UTC),
+                        # 直接比较会报 "can't compare offset-naive and offset-aware datetimes"
+                        _lr = _r.last_reviewed
+                        if _lr.tzinfo is None:
+                            _lr = _lr.replace(tzinfo=_tz.utc)
+                        if _lr + _td2(days=_intv) <= _now:
                             _due += 1
                     else:
                         _due += 1
@@ -449,13 +470,10 @@ def evaluation_agent_node(state: AgentState, spark: SparkClient) -> dict:
         "overall": overall_score,
     }
 
+    # P1 (2026-07-12): 评估模式下不注入画像引导 — 用户请求的是评估报告,
+    # 不是画像采集。_build_profile_guide 内的追问指令会导致 LLM 在评估报告
+    # 开头插入 "我注意到你的认知风格是空白的..." 等画像追问，打断评估流程。
     eval_system = EVALUATION_PROMPT.format(profile_summary=profile_summary)
-
-    # 画像引导注入 — 新用户首次使用时收集画像
-    from app.core.shared_utils import _build_profile_guide
-    profile_guide = _build_profile_guide(profile)
-    if profile_guide:
-        eval_system += profile_guide
 
     # 注意：Mermaid 饼图由 chat.py 在流式结束后统一追加（使用真实 BKT 数据）
     # 此处不再注入到 system prompt，避免 LLM 重复生成导致图表重复

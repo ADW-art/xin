@@ -773,10 +773,11 @@ async def chat_send(
                                 assistant_content += safe_fallback  # P1-2: 追加而非覆盖
                                 yield f"event: v1.message\ndata: {json.dumps({'content': safe_fallback, 'agent': agent_name}, ensure_ascii=False)}\n\n"
                             elif agent_name == "resource_agent" and guard.finalize():
-                                logger.warning("SSE: %s 流式输出被anti-plan检测拦截", agent_name)
-                                safe_fallback = guard.get_safe_content()
-                                assistant_content += safe_fallback  # P1-2: 追加而非覆盖
-                                yield f"event: v1.message\ndata: {json.dumps({'content': safe_fallback, 'agent': agent_name}, ensure_ascii=False)}\n\n"
+                                # P1-3 (2026-07-12): anti-plan 不再替换已发送的流式内容，
+                                # 仅发送 system_notice 供前端显示警告横幅。质量门由 supervisor 负责。
+                                logger.warning("SSE: %s 流式输出疑似学习计划 (len=%d), 已发送system_notice",
+                                             agent_name, len(guard._buffer))
+                                yield f"event: v1.system_notice\ndata: {json.dumps({'type': 'plan_warning', 'reason': '生成内容可能包含课程计划结构', 'severity': 'low'}, ensure_ascii=False)}\n\n"
                             yield f"event: v1.progress\ndata: {json.dumps({'stage': 'complete', 'agent': agent_name, 'progress': 100}, ensure_ascii=False)}\n\n"
                         except Exception as stream_err:
                             logger.warning("SSE: %s 流式输出异常: %s", agent_name, stream_err)
@@ -800,12 +801,13 @@ async def chat_send(
                         if safe:
                             # resource_agent + path_agent: 检测计划/课程表模式输出
                             if agent_name == "resource_agent" and guard.is_learning_plan_output(buf):
-                                logger.warning("SSE: %s buffer被anti-plan检测拦截", agent_name)
-                                safe_msg = "抱歉，生成的内容格式不符合当前教学模式要求。\n\n正在为您重新生成聚焦于该知识点的讲解内容，请稍候..."
-                                assistant_content += safe_msg
-                                yield f"event: v1.message\ndata: {json.dumps({'content': safe_msg, 'agent': agent_name}, ensure_ascii=False)}\n\n"
-                                # P2-B 2026-07-11: 通知前端内容被调整
-                                yield f"event: v1.system_notice\ndata: {json.dumps({'type': 'plan_filtered', 'reason': '检测到学习计划结构, 已替换为引导文案', 'original_len': len(buf)}, ensure_ascii=False)}\n\n"
+                                # P1-3 (2026-07-12): anti-plan 不再替换 buffer 内容，
+                                # 改为透传 + system_notice 警告。质量门由 supervisor 负责。
+                                logger.warning("SSE: %s buffer疑似学习计划 (len=%d), 透传+system_notice",
+                                             agent_name, len(buf))
+                                assistant_content += buf
+                                yield f"event: v1.message\ndata: {json.dumps({'content': buf, 'agent': agent_name}, ensure_ascii=False)}\n\n"
+                                yield f"event: v1.system_notice\ndata: {json.dumps({'type': 'plan_warning', 'reason': '生成内容可能包含课程计划结构', 'severity': 'low', 'original_len': len(buf)}, ensure_ascii=False)}\n\n"
                             else:
                                 assistant_content += buf
                                 yield f"event: v1.message\ndata: {json.dumps({'content': buf, 'agent': agent_name}, ensure_ascii=False)}\n\n"

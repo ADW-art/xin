@@ -733,8 +733,8 @@ function handleSend(content: string, images?: ChatImage[]) {
 
       // Dispatch to extracted handlers
       if (data.type === 'progress') handleProgress(data)
-      else if (data.from && data.to) handleAgentSwitch(data)
-              else if (data.type === 'resource') handleResourceMeta(data)
+      else if (data.type === 'agent_switch') handleAgentSwitch(data)
+      else if (data.type === 'resource') handleResourceMeta(data)
         else if (data.type === 'resource_ready') handleResourceReady(data)
       else if (data.type === 'suggestion') handleSuggestion(data)
       else if (data.type === 'collaboration') handleCollaboration(data)

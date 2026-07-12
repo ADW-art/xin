@@ -169,8 +169,16 @@ export function sendMessageStream(
               // 显式标注事件类型，方便前端区分处理
               data.type = currentEvent
               // 过滤空 content（后端可能发送空 chunk）
-              if (data.content === undefined || data.content !== '') {
+              // P1-4 (2026-07-12): null !== '' 为 true, 导致 null content 穿透过滤器,
+              // handleTextMessage 收到 null → text='' → appendToStreaming 永不调用 → 内容丢失
+              if (data.content !== undefined && data.content !== null && data.content !== '') {
                 onChunk(data)
+              } else if (data.content === undefined || data.content === null) {
+                // content 字段不存在或为 null 时仍然触发 onChunk,
+                // 让 system_notice/collaboration 等非文本事件能正常分发
+                if (data.type !== 'message') {
+                  onChunk(data)
+                }
               }
             } catch {
               // JSON 解析失败，跳过该行（可能是 [DONE] 等非 JSON 数据）
@@ -180,13 +188,21 @@ export function sendMessageStream(
       }
       // P0-FIX (2026-07-12): flush buffer 残留的最后一段
       // 流在事件中间被关闭时，buffer 中可能还有最后一段不完整数据
+      // P1-5 (2026-07-12): 同时处理残留的 event: 和 data: 行,
+      // 防止 event: v1.message\n 残留在 buffer 中导致 currentEvent 错位
       if (buffer.trim()) {
         const trimmed = buffer.trim()
-        if (trimmed.startsWith('data: ')) {
+        if (trimmed.startsWith('event: ')) {
+          let rawEvent = trimmed.slice(7).trim()
+          if (rawEvent.startsWith('v1.')) rawEvent = rawEvent.slice(3)
+          currentEvent = rawEvent
+        } else if (trimmed.startsWith('data: ')) {
           try {
             const data = JSON.parse(trimmed.slice(6))
             data.type = currentEvent
-            if (data.content === undefined || data.content !== '') {
+            if (data.content !== undefined && data.content !== null && data.content !== '') {
+              onChunk(data)
+            } else if ((data.content === undefined || data.content === null) && data.type !== 'message') {
               onChunk(data)
             }
           } catch { /* 最后一段不完整，忽略 */ }

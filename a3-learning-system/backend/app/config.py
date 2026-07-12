@@ -84,9 +84,6 @@ settings = Settings()  # 创建全局对象
 # 画像追问: 每个会话最多触发追问次数
 AGENT_MAX_ASK_PER_SESSION = 2
 
-# 教学模式: 连续自动推进上限 (达到后暂停让用户消化)
-AGENT_AUTO_ADVANCE_LIMIT = 3
-
 # BKT 答题速度缓存 TTL (秒) — 5分钟
 AGENT_SPEED_CACHE_TTL = 300
 

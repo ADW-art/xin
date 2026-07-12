@@ -141,7 +141,9 @@
       "Bash(rm -rf \"E:/code/claude-1/.claude/agents\")",
       "Bash(mkdir -p \"E:/code/claude-1/.claude/skills\")",
       "mcp__plugin_playwright_playwright__browser_press_key",
-      "mcp__plugin_playwright_playwright__browser_close"
+      "mcp__plugin_playwright_playwright__browser_close",
+      "mcp__plugin_playwright_playwright__browser_network_request",
+      "mcp__plugin_playwright_playwright__browser_find"
     ]
   },
   "enableAllProjectMcpServers": true,

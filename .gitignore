@@ -8,6 +8,9 @@ Git远程关联原理与操作详解.md
 .claude/settings.local.json
 .mcp.json
 
+# Playwright / browser testing artifacts
+.playwright-mcp/
+
 # Local data
 a3-learning-system/backend/chroma_data_local/
 a3-learning-system/backend/data/
