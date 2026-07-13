@@ -64,11 +64,14 @@ class ContentGuard:
     ]
 
     # -- 教育领域白名单（这些领域的正常教学内容不应被拦截）--
+    # P2-FIX (2026-07-13): 短术语加 \b 边界，避免匹配 URL 内部字符
+    # (如 "https://" 中的 "http" 匹配 HTTP 导致误判)
     EDU_DOMAIN_PATTERNS = [
-        r'(?:Python|Java|C\+\+|Go|Rust|JavaScript|TypeScript|算法|数据结构|计算机|编程|网络|数据库|机器学习|深度学习|人工智能|数学|物理|化学)',
+        r'(?:Python|Java|C\+\+|Go\b|Rust|JavaScript|TypeScript|算法|数据结构|计算机|编程|网络|数据库|机器学习|深度学习|人工智能|数学|物理|化学)',
         r'(?:def |class |import |function|variable|loop|recursion|closure|decorator|generator|iterator|lambda)',
         r'(?:闭包|装饰器|生成器|迭代器|列表推导|字典|集合|元组|数组|链表|栈|队列|树|图|排序|搜索|递归|动态规划|贪心)',
-        r'(?:前端|后端|全栈|API|REST|HTTP|TCP|UDP|DNS|SSL|TLS|Docker|Kubernetes|Git|Linux|Windows|MacOS)',
+        r'\b(?:API|REST|HTTP|TCP|UDP|DNS|SSL|TLS)\b',
+        r'(?:Docker|Kubernetes|Git\b|Linux|Windows|MacOS|前端|后端|全栈)',
     ]
 
     def is_education_domain(self, text: str) -> bool:
@@ -116,7 +119,32 @@ class ContentGuard:
         self._compiled_hallucination = [
             (re.compile(r'(?:Python|python)\s*(?:中|的|有一个|内置的函数叫|标准库中有)\s*`?(\w+)`?\s*(?:函数|方法|模块)', re.IGNORECASE), '可能编造了不存在的Python函数'),
             (re.compile(r'(?:根据|据|参考)\s*(?:[A-Z][a-z]+\s*(?:et\s*al\.?|和|and)\s*(?:19|20)\d{2})', re.IGNORECASE), '可能引用虚构的学术文献'),
-            (re.compile(r'https?://(?!spark-api\.xf-yun\.com|(?:[a-zA-Z0-9-]+\.)*python\.org|github\.com|wikipedia\.org|developer\.mozilla\.org|stackoverflow\.com|pypi\.org)[a-zA-Z0-9.-]+\.[a-z]{2,}', re.IGNORECASE), '包含未经验证的外部链接'),
+            (re.compile(
+                r'https?://(?!'
+                # 官方/教育域名白名单
+                r'(?:[a-zA-Z0-9-]+\.)*python\.org|'
+                r'(?:[a-zA-Z0-9-]+\.)*github\.(?:com|io)|'
+                r'(?:[a-zA-Z0-9-]+\.)*wikipedia\.org|'
+                r'developer\.mozilla\.org|'
+                r'(?:[a-zA-Z0-9-]+\.)*stackoverflow\.com|'
+                r'(?:[a-zA-Z0-9-]+\.)*pypi\.org|'
+                r'(?:[a-zA-Z0-9-]+\.)*readthedocs\.io|'
+                r'(?:[a-zA-Z0-9-]+\.)*anaconda\.org|'
+                r'(?:[a-zA-Z0-9-]+\.)*docker\.com|'
+                r'(?:[a-zA-Z0-9-]+\.)*npmjs\.com|'
+                r'(?:[a-zA-Z0-9-]+\.)*yarnpkg\.com|'
+                r'(?:[a-zA-Z0-9-]+\.)*pip\.pypa\.io|'
+                r'(?:[a-zA-Z0-9-]+\.)*packaging\.python\.org|'
+                r'(?:[a-zA-Z0-9-]+\.)*peps\.python\.org|'
+                r'(?:[a-zA-Z0-9-]+\.)*docs\.python\.org|'
+                r'(?:[a-zA-Z0-9-]+\.)*jetbrains\.com|'
+                r'(?:[a-zA-Z0-9-]+\.)*vscode\.dev|'
+                r'(?:[a-zA-Z0-9-]+\.)*code\.visualstudio\.com|'
+                r'(?:[a-zA-Z0-9-]+\.)*spark-api\.xf-yun\.com|'
+                r'localhost(?::\d+)?'
+                r')[a-zA-Z0-9.-]*\.?[a-z]{2,}',
+                re.IGNORECASE
+            ), '包含未经验证的外部链接'),
         ]
         # 重复检测: 参考 NVIDIA garak RepeatedToken detector
         # (.{10,100}?)\1{2,} — 10-100字符序列重复3+次
@@ -165,8 +193,8 @@ class ContentGuard:
             return True, None
 
         is_edu = self.is_education_domain(text)
-        # 总是阻断的严重幻觉模式
-        CRITICAL_PATTERNS = {"可能引用虚构的学术文献", "包含未经验证的外部链接"}
+        # 总是阻断的严重幻觉模式（学术引用伪造始终阻断）
+        CRITICAL_PATTERNS = {"可能引用虚构的学术文献"}
 
         for pattern, desc in self._compiled_hallucination:
             match = pattern.search(text)

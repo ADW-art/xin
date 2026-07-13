@@ -550,6 +550,17 @@ def is_teaching_continue(text: str, tc: dict | None = None) -> bool:
       3. 自然语言引用 active_path 中的节点名
     """
     stripped = text.strip()
+
+    # P2-FIX (2026-07-13): "讲解/解释/介绍 + 具体内容" 是新的资源请求,
+    # 不是教学继续信号 — 防止 "讲解列表和字典" 被模糊匹配误判为 continue
+    # 例外: "讲一下第3天" 等含 "第X天" 导航模式的仍视为教学跳转
+    if re.match(
+        r'^(讲解|讲一下|解释|介绍|说说|教我|讲讲|什么是|怎么用|如何|帮我|我想学|我要学|聊一下|说下)\s*\S',
+        stripped
+    ):
+        if not re.search(r'第[一二三四五六七八九十\d]+\s*(天|节|课|章|节点|步)', stripped):
+            return False
+
     short_continue = re.match(
         r'^(好|好的|可以|行|来|开始|没问题|嗯|OK|ok|yes|是|对|继续|下一个|下一节|接着|继续学|接着学|往下|往下学|学下一个|go on|next|continue|sure|yep|yeah|当然|必须的|搞起|来吧|开始吧|继续吧|OK吧)$',
         stripped

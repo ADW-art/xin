@@ -719,9 +719,8 @@ def resource_agent_node(state: AgentState, spark: SparkClient) -> dict:
     else:
         difficulty_rule = "学生画像中无知识基础数据，按入门水平讲解：每个概念从基础讲起，代码注释详尽，多用类比辅助理解。"
 
-    # 画像引导注入 — 新用户首次使用时收集画像
-    from app.core.shared_utils import _build_profile_guide
-    profile_guide = _build_profile_guide(profile)
+    # P2 (2026-07-13): 不注入画像引导 — 用户明确请求教学资源,
+    # 画像采集由 supervisor 的 profile guard 统一处理。
 
     # P1-#4 (2026-07-11): 注入 BKT 掌握度 + 最近对话历史, 强化差异化和上下文
     try:
@@ -788,9 +787,7 @@ def resource_agent_node(state: AgentState, spark: SparkClient) -> dict:
         difficulty_rule=difficulty_rule,
     )
 
-    # 画像引导注入
-    if profile_guide:
-        resource_system += profile_guide
+    # P2 (2026-07-13): 画像引导已移除 — supervisor profile guard 统一处理
     # P1-#4 (2026-07-11): 追加 BKT + history 上下文
     if bkt_context:
         resource_system += "\n" + bkt_context

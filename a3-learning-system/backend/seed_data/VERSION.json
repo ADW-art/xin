@@ -1,0 +1,11 @@
+{
+  "generated_at": "2026-07-13T12:47:57.267560",
+  "total_records": 14,
+  "chroma_version": "0.5.20",
+  "bge_model": "BAAI/bge-m3",
+  "embedding_dim": 1024,
+  "purpose": "Python 学习系统种子数据, 包含 51 个治理概念 + PDF 教材提及",
+  "regen_command": "python backend/scripts/export_python_seed.py",
+  "min_chroma_version": "0.5.0",
+  "min_bge_model": "BAAI/bge-m3"
+}

@@ -46,7 +46,7 @@ STALE_ONE_SHOT_FLAGS: frozenset[str] = frozenset({
     "_bkt_relevant",                # evaluation 路由标记
 
     # === 资源生成 ===
-    "_quality_retry",               # 资源质量重试信号
+    # _quality_retry 已废弃 (P2 2026-07-13: 质量门不再自动重生成)
 
     # === 内部防重入 ===
     "_agent_lock",                  # 防止并发 agent 调用

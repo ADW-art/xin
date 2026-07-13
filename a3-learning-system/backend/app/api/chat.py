@@ -617,6 +617,7 @@ async def chat_send(
         _captured_outputs = {}
         _agent_switch_count = 0
         _pending_resource_meta = None  # C7: 延迟到 LLM 完成后创建 Resource
+        _quality_notice_sent = False  # P2 (2026-07-13): 质量审查提醒只发一次
         # P0-#1/P1-#5 (2026-07-11): 同请求去重 + 流式完整性校验
         _user_msg = request.content
         _integrity = _new_integrity_checker()
@@ -793,6 +794,15 @@ async def chat_send(
                         # P1-1 (2026-07-12): 超时时 break 外层 for/async for 循环
                         if _force_stop:
                             break
+                        # P2 (2026-07-13): 质量审查反馈 → system_notice 提醒用户
+                        if not _quality_notice_sent and agent_name == "rc_join":
+                            _qc = _captured_outputs.get("quality_reviewer", {})
+                            _qc_issues = _qc.get("issues", [])
+                            if _qc_issues:
+                                _quality_notice_sent = True
+                                _qc_text = " | ".join(i for i in _qc_issues[:3] if not i.startswith("["))
+                                if _qc_text:
+                                    yield f"event: v1.system_notice\ndata: {json.dumps({'type': 'quality_hint', 'issues': _qc_issues[:3], 'text': _qc_text, 'severity': 'info'}, ensure_ascii=False)}\n\n"
                         continue
 
                     buf = node_update.get("stream_buffer", "")

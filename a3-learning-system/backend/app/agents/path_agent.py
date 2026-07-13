@@ -1283,11 +1283,7 @@ def path_agent_node(state: AgentState, spark: SparkClient) -> dict:
                 "输出要求: 5部分(诊断/路线表格/时间/复习/里程碑),最多8阶段,表格呈现,禁止寒暄和emoji。\n\n"
                 "禁止: 增加/删除/重命名知识点, 改变阶段顺序, 编造数字。\n\n" + full_kg_text
             )
-            # 画像引导注入
-            from app.core.shared_utils import _build_profile_guide
-            profile_guide = _build_profile_guide(profile)
-            if profile_guide:
-                kg_polish_system += profile_guide
+            # P2 (2026-07-13): 画像引导已移除 — supervisor profile guard 统一处理
 
             from app.core.shared_utils import _build_llm_messages
             messages = _build_llm_messages(

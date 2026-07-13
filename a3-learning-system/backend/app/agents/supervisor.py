@@ -626,36 +626,34 @@ def _handle_agent_return(state: dict, agent_outputs: dict, current_agent: str,
                 "stream_buffer": "",
                 "trace": _new_traces,
             }
+        # P2-FIX (2026-07-13): 安全网 — path_join 所有已知条件都不匹配时 (如 gate 通过
+        # 但 stage 为空且 teaching_stage 不在 path_output 中), 直接 END,
+        # 避免落回默认分支把同一条 HumanMessage 重新分类导致循环
+        logger.warning("Supervisor: path_join 未匹配任何路由条件 (stage=%r, keys=%s) → END",
+                       stage, list(path_output.keys())[:10])
+        return {
+            "current_agent": "supervisor",
+            "next_agent": "END",
+            "context": state.get("context", {}),
+            "stream_buffer": "",
+            "trace": _new_traces,
+        }
 
     # ── 画像优先流程: profile_agent 完成采集 → 回到原意图 ──
     _profile_route = _handle_profile_first_routing(state, current_agent, tc, _new_traces)
     if _profile_route is not None:
         return _profile_route
 
-    # ── 质量审查门: quality_reviewer 低分 → 难度重定向 ──
+    # ── 质量审查门: 仅反馈建议，不自动重生成 ──
+    # P2 (2026-07-13): 移除 score<60 自动重生成逻辑。
+    # 质量审查的建议通过 system_notice 透传给前端，由用户决定是否重新生成。
     if current_agent == "rc_join":
         qc = agent_outputs.get("quality_reviewer", {})
         qc_score = qc.get("score", 100)
-        if qc_score < 60:
-            qc_issues = qc.get("issues", [])
-            difficulty_hint = qc.get("difficulty_target", "适中")
-            logger.warning("Supervisor: 质量审查不通过 score=%d → 重新生成 (hint=%s)", qc_score, difficulty_hint)
-            _retry_ctx = {**state.get("context", {}),
-                          "_quality_retry": True,
-                          "_quality_issues": qc_issues[:3],
-                          "_difficulty_hint": difficulty_hint}
-            return {
-                "current_agent": "supervisor",
-                "next_agent": "resource_agent",
-                "context": _retry_ctx,
-                "teaching_context": state.get("teaching_context"),
-                "stream_buffer": "",
-                "trace": _new_traces,
-            }
         if qc_score < 75:
             _hint = qc.get("difficulty_target", "")
-            logger.info("Supervisor: 质量审查偏低 score=%d hint=%s — 输出但标记", qc_score, _hint)
-        # P3: 质量反馈传递 — 将审查建议注入 teaching_context，供后续 resource_agent 调用改进
+            logger.info("Supervisor: 质量审查 score=%d hint=%s — 透传建议至前端", qc_score, _hint)
+        # 质量反馈注入 teaching_context，供后续 resource_agent 调用时参考
         qc_issues = qc.get("issues", [])
         if qc_issues:
             tc = dict(tc)  # H6: copy-on-write, 避免直接 mutation 原 state
@@ -664,6 +662,18 @@ def _handle_agent_return(state: dict, agent_outputs: dict, current_agent: str,
                 "difficulty_target": qc.get("difficulty_target", ""),
             }
             logger.info("Supervisor: 质量反馈已注入 teaching_context (%d issues)", len(qc_issues))
+        # P2-FIX (2026-07-13): 非教学模式独立资源生成 → END,
+        # 避免默认分支把同一条 HumanMessage 重新分类再路由回 resource_agent
+        if not tc.get("mode"):
+            logger.info("Supervisor: 独立资源生成完成 → END")
+            return {
+                "current_agent": "supervisor",
+                "next_agent": "END",
+                "context": state.get("context", {}),
+                "teaching_context": tc,
+                "stream_buffer": "",
+                "trace": _new_traces,
+            }
 
     # ── 教学模式: 每节点完成后等待用户确认，不再自动推进 ──
     # P0 (2026-07-12): 移除 auto_advance 循环，一条用户消息只生成一个节点内容
@@ -697,8 +707,10 @@ def _handle_agent_return(state: dict, agent_outputs: dict, current_agent: str,
         ctx = state.get("context", {})
         merged_ao = state.get("agent_outputs", {})
 
-        # 独立 evaluation 调用 → 薄弱维度检测 (非 QA 链场景)
-        if not ctx.get("_qa_stage"):
+        qa_stage = ctx.get("_qa_stage", "")
+
+        # 独立 question 生成 (QA 协作链未启用时)
+        if not qa_stage:
             eval_out = merged_ao.get("evaluation_agent", {})
             weak_dims = eval_out.get("dimension_scores", {})
             if any(v < 40 for v in weak_dims.values() if isinstance(v, (int, float))):
@@ -710,9 +722,18 @@ def _handle_agent_return(state: dict, agent_outputs: dict, current_agent: str,
                     "stream_buffer": "",
                     "trace": _new_traces,
                 }
+            # P2-FIX (2026-07-13): 独立出题完成后直接 END,
+            # 避免默认分支把同一条 HumanMessage 重新分类再路由回 question_agent
+            logger.info("Supervisor: 独立question生成完成 → END")
+            return {
+                "current_agent": "supervisor",
+                "next_agent": "END",
+                "context": ctx,
+                "stream_buffer": "",
+                "trace": _new_traces,
+            }
 
-        qa_stage = ctx.get("_qa_stage", "")
-
+        # QA 协作链分支 (first_review / revision) — 当前 _qa_stage 初始化已禁用
         if qa_stage == "first_review":
             if merged_ao.get("evaluation_agent"):
                 logger.info("Supervisor: QA 协作链 审核完成(evaluation_agent) → question_agent 修正")
@@ -1126,27 +1147,44 @@ def supervisor_node(state: AgentState, spark: SparkClient) -> dict:
     tc = state.get("teaching_context") or {}
 
     # ── 优先级0: 教学流程继续 ──
-    if tc.get("mode") == "teaching" and is_teaching_continue(last_msg, tc):
-        _tc_ctx = {**state.get("context", {}), "teaching_continue": True}
-        # 解析教学引用: 用户指定了具体第X天 → 跳转到目标索引
-        # (P0-FIX 2026-07-11: shared_utils 导出名为 resolve_teaching_reference, 无下划线)
-        _ref = resolve_teaching_reference(last_msg, tc)
-        _cur_idx = tc.get("current_index", 0)
-        if _ref and _ref.get("index", _cur_idx) != _cur_idx + 1:
-            _tc_ctx["teach_target_index"] = _ref["index"]
-            _tc_ctx["topic"] = _ref["topic"]
-            logger.info("Supervisor: 教学跳转 → index=%d node='%s'", _ref["index"], _ref["topic"])
-        else:
-            logger.info("Supervisor: 教学流程继续 → path_agent (advance index=%d, total=%d)",
-                         tc.get("current_index", 0), len(tc.get("active_path", [])))
-        return {
-            "current_agent": "supervisor",
-            "next_agent": "path_agent",
-            "context": _tc_ctx,
-            "teaching_context": tc,
-            "stream_buffer": "",
-            "trace": _new_traces,
-        }
+    if is_teaching_continue(last_msg, tc):
+        if tc.get("mode") == "teaching":
+            _tc_ctx = {**state.get("context", {}), "teaching_continue": True}
+            # 解析教学引用: 用户指定了具体第X天 → 跳转到目标索引
+            # (P0-FIX 2026-07-11: shared_utils 导出名为 resolve_teaching_reference, 无下划线)
+            _ref = resolve_teaching_reference(last_msg, tc)
+            _cur_idx = tc.get("current_index", 0)
+            if _ref and _ref.get("index", _cur_idx) != _cur_idx + 1:
+                _tc_ctx["teach_target_index"] = _ref["index"]
+                _tc_ctx["topic"] = _ref["topic"]
+                logger.info("Supervisor: 教学跳转 → index=%d node='%s'", _ref["index"], _ref["topic"])
+            else:
+                logger.info("Supervisor: 教学流程继续 → path_agent (advance index=%d, total=%d)",
+                             tc.get("current_index", 0), len(tc.get("active_path", [])))
+            return {
+                "current_agent": "supervisor",
+                "next_agent": "path_agent",
+                "context": _tc_ctx,
+                "teaching_context": tc,
+                "stream_buffer": "",
+                "trace": _new_traces,
+            }
+        # P2-FIX (2026-07-13): 教学继续信号但 teaching_context 不存在
+        # (例: "接着讲" after 独立 resource 讲解) → 自动转 init_teaching,
+        # 避免意图分类误判为 path → 完整计划生成 → path_join 无 stage → 默认分支循环
+        has_history = bool(
+            agent_outputs.get("path_agent") or agent_outputs.get("resource_agent")
+        )
+        if has_history:
+            logger.info("Supervisor: 教学继续信号 (无tc, 有历史上下文) → init_teaching")
+            return {
+                "current_agent": "supervisor",
+                "next_agent": "path_agent",
+                "context": {**state.get("context", {}), "init_teaching": True},
+                "teaching_context": tc,
+                "stream_buffer": "",
+                "trace": _new_traces,
+            }
 
     # ── 优先级1: 答案提交检测 ──
     if is_answer_submission(last_msg):

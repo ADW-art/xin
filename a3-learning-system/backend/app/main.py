@@ -229,6 +229,29 @@ async def init_db():
             logger.warning("习题库后台加载失败: %s", e)
     threading.Thread(target=_load_exercises, daemon=True).start()
 
+    # 种子数据加载（开箱即用 - 首次启动时从仓库内 seed_data/ 自动入库）
+    # 失败不阻断, 用户可手动 python scripts/load_seed_data.py --force 重试
+    def _load_seed_data():
+        try:
+            # 用 importlib 避免路径问题
+            import importlib.util
+            spec = importlib.util.spec_from_file_location(
+                "load_seed_data",
+                os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts", "load_seed_data.py")
+            )
+            if spec and spec.loader:
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                result = mod.load_seed_data(force=False)
+                if not result.get("skipped") and (result.get("knowledge_base", 0) + result.get("exercise_bank", 0)) > 0:
+                    logger.info(
+                        "🌱 种子数据加载完成: knowledge_base=%d, exercise_bank=%d",
+                        result.get("knowledge_base", 0), result.get("exercise_bank", 0)
+                    )
+        except Exception as e:
+            logger.warning("种子数据加载失败 (非阻塞, 可手动重试): %s", e)
+    threading.Thread(target=_load_seed_data, daemon=True).start()
+
     # 知识库教材索引（jieba + BM25，不依赖 BGE）
     def _load_content_library():
         try:

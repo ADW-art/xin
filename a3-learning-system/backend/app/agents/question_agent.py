@@ -501,11 +501,10 @@ def question_agent_node(state: AgentState, spark: SparkClient) -> dict:
                     dims_str, context.get('topic', topic),
                 )
 
-        # 画像引导注入 — 新用户首次使用时收集画像
-        from app.core.shared_utils import _build_profile_guide
-        profile_guide = _build_profile_guide(profile)
-        if profile_guide:
-            question_system += profile_guide
+        # P2 (2026-07-13): 不注入画像引导 — 用户明确请求出题,
+        # 画像采集由 supervisor 的 profile guard 统一处理。
+        # _build_profile_guide 内的追问指令会导致 LLM 在出题前插入
+        # "请问你的学习风格是什么" 等画像追问，打断出题流程。
 
         # 携带对话历史上下文，确保多轮对话中约束条件和语言偏好跨轮传递
         from app.core.shared_utils import _build_llm_messages
